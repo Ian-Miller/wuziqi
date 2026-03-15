@@ -18,6 +18,7 @@ const TIME_CHECK_FREQ: u64 = 256;
 /// 进度回调节流参数（避免 JNI 高频调用影响算力）
 const PROGRESS_REPORT_INTERVAL_MS: u64 = 100;
 const PROGRESS_MIN_DELTA_PERCENT: i32 = 1;
+const PROGRESS_NODE_CHECK_FREQ: u64 = 2048;
 
 /// 开局中心点
 const OPENING_CENTER: (usize, usize) = (7, 7);
@@ -281,6 +282,36 @@ impl GomokuAi {
             *last_report_ms = now;
             *last_report_percent = p;
         }
+    }
+
+    /// 心跳：统一处理取消、时间检查、低频进度上报
+    /// 返回 false 表示应立即停止搜索。
+    fn heartbeat(
+        &self,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+        last_report_ms: &mut u64,
+        last_report_percent: &mut i32,
+    ) -> bool {
+        if self.should_stop.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let n = self.node_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if n % TIME_CHECK_FREQ == 0 {
+            if self.start_time.elapsed().as_millis() as u64 > self.turn_time_limit_ms {
+                return false;
+            }
+        }
+
+        if n % PROGRESS_NODE_CHECK_FREQ == 0 {
+            let t_ratio = (self.start_time.elapsed().as_millis() as f64
+                / self.turn_time_limit_ms.max(1) as f64)
+                .clamp(0.0, 1.0);
+            let p = (t_ratio * 97.0).round() as i32;
+            self.maybe_report_progress(on_progress, p.clamp(0, 97), last_report_ms, last_report_percent, false);
+        }
+
+        true
     }
 
     pub fn take_turn_with_progress(
@@ -548,7 +579,18 @@ impl GomokuAi {
         if start_depth > 2 && self.time_ok() {
             let t = self.start_time.elapsed().as_millis() as u64;
             let (d_best, done, win, root_score) =
-                self.search_one_depth(board, moves, 2, best_move, root_hash, i32::MIN + 1, i32::MAX - 1);
+                self.search_one_depth(
+                    board,
+                    moves,
+                    2,
+                    best_move,
+                    root_hash,
+                    i32::MIN + 1,
+                    i32::MAX - 1,
+                    on_progress,
+                    last_report_ms,
+                    last_report_percent,
+                );
             if done {
                 best_move = d_best;
                 self.last_root_score = root_score;
@@ -584,7 +626,18 @@ impl GomokuAi {
             }
 
             let (mut d_best, mut done, mut win, mut root_score) =
-                self.search_one_depth(board, moves, current_depth, best_move, root_hash, alpha0, beta0);
+                self.search_one_depth(
+                    board,
+                    moves,
+                    current_depth,
+                    best_move,
+                    root_hash,
+                    alpha0,
+                    beta0,
+                    on_progress,
+                    last_report_ms,
+                    last_report_percent,
+                );
 
             while done
                 && current_depth >= 4
@@ -597,7 +650,18 @@ impl GomokuAi {
                 alpha0 = self.last_root_score - margin;
                 beta0 = self.last_root_score + margin;
                 let (b2, d2, w2, s2) =
-                    self.search_one_depth(board, moves, current_depth, d_best, root_hash, alpha0, beta0);
+                    self.search_one_depth(
+                        board,
+                        moves,
+                        current_depth,
+                        d_best,
+                        root_hash,
+                        alpha0,
+                        beta0,
+                        on_progress,
+                        last_report_ms,
+                        last_report_percent,
+                    );
                 d_best = b2;
                 done = d2;
                 win = w2;
@@ -611,7 +675,18 @@ impl GomokuAi {
                 && self.time_ok()
             {
                 let (b3, d3, w3, s3) =
-                    self.search_one_depth(board, moves, current_depth, d_best, root_hash, i32::MIN + 1, i32::MAX - 1);
+                    self.search_one_depth(
+                        board,
+                        moves,
+                        current_depth,
+                        d_best,
+                        root_hash,
+                        i32::MIN + 1,
+                        i32::MAX - 1,
+                        on_progress,
+                        last_report_ms,
+                        last_report_percent,
+                    );
                 d_best = b3;
                 done = d3;
                 win = w3;
@@ -690,6 +765,9 @@ impl GomokuAi {
         root_hash: u64,
         mut alpha: i32,
         beta: i32,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+        last_report_ms: &mut u64,
+        last_report_percent: &mut i32,
     ) -> ((usize, usize), bool, bool, i32) {
         let mut best = fallback;
         let mut timed_out = false;
@@ -739,6 +817,9 @@ impl GomokuAi {
                 child_hash,
                 1,
                 Some((row, col)),
+                on_progress,
+                last_report_ms,
+                last_report_percent,
             );
 
             // 根节点重复局面惩罚（主要改善撤销/重试时“机械复读同一步”）
@@ -897,9 +978,11 @@ impl GomokuAi {
         hash: u64,
         ply: usize,
         last_move: Option<(usize, usize)>,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+        last_report_ms: &mut u64,
+        last_report_percent: &mut i32,
     ) -> i32 {
-        // 每个节点都检查 should_stop（Acquire：确保看到其他线程的 Release 写入）
-        if !self.should_continue() {
+        if !self.heartbeat(on_progress, last_report_ms, last_report_percent) {
             return 0;
         }
 
@@ -979,7 +1062,7 @@ impl GomokuAi {
         let mut first_move = true;
         for (idx, ((row, col), move_hint_score)) in moves.iter().enumerate() {
             let (row, col) = (*row, *col);
-            if !self.should_continue() {
+            if !self.heartbeat(on_progress, last_report_ms, last_report_percent) {
                 return alpha;
             }
 
@@ -1004,18 +1087,66 @@ impl GomokuAi {
             // PVS（Principal Variation Search）
             // 首着全窗口，后续先零窗口探测，必要时再全窗口重搜
             let mut score = if first_move {
-                -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, child_hash, ply + 1, Some((row, col)))
+                -self.minimax(
+                    board,
+                    player.opponent(),
+                    search_depth,
+                    -beta,
+                    -alpha,
+                    child_hash,
+                    ply + 1,
+                    Some((row, col)),
+                    on_progress,
+                    last_report_ms,
+                    last_report_percent,
+                )
             } else {
-                let mut s = -self.minimax(board, player.opponent(), search_depth, -alpha - 1, -alpha, child_hash, ply + 1, Some((row, col)));
+                let mut s = -self.minimax(
+                    board,
+                    player.opponent(),
+                    search_depth,
+                    -alpha - 1,
+                    -alpha,
+                    child_hash,
+                    ply + 1,
+                    Some((row, col)),
+                    on_progress,
+                    last_report_ms,
+                    last_report_percent,
+                );
                 if s > alpha && s < beta {
-                    s = -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, child_hash, ply + 1, Some((row, col)));
+                    s = -self.minimax(
+                        board,
+                        player.opponent(),
+                        search_depth,
+                        -beta,
+                        -alpha,
+                        child_hash,
+                        ply + 1,
+                        Some((row, col)),
+                        on_progress,
+                        last_report_ms,
+                        last_report_percent,
+                    );
                 }
                 s
             };
 
             // 若 LMR 降深后出现潜在改进，再用完整深度复核一次
             if reduce > 0 && score > alpha {
-                score = -self.minimax(board, player.opponent(), depth - 1, -beta, -alpha, child_hash, ply + 1, Some((row, col)));
+                score = -self.minimax(
+                    board,
+                    player.opponent(),
+                    depth - 1,
+                    -beta,
+                    -alpha,
+                    child_hash,
+                    ply + 1,
+                    Some((row, col)),
+                    on_progress,
+                    last_report_ms,
+                    last_report_percent,
+                );
             }
 
             // 回溯撤销

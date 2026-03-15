@@ -389,6 +389,7 @@ fun PlayerAvatar(
 ) {
     val borderColor = if (isWinner) Color.Yellow else if (isActive) MaterialTheme.colorScheme.primary else Color.Transparent
     val borderWidth = if (isActive || isWinner) 3.dp else 0.dp
+    val avatarBgColor = if (isBlack) Color.Black else Color.White
     
     // 呼吸动画
     val transition = rememberInfiniteTransition(label = "ActiveGlow")
@@ -452,34 +453,40 @@ fun PlayerAvatar(
             modifier = Modifier
                 .size(42.dp)
                 .shadow(elevation = if(isActive) 8.dp else 0.dp, shape = CircleShape, ambientColor = glowColor, spotColor = glowColor)
-                .border(borderWidth, borderColor, CircleShape)
-                .background(if (isBlack) Color.Black else Color.White, CircleShape)
-                .padding(8.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isShowingProgress && displayedProgress > 0f) {
-                androidx.compose.foundation.Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(1.dp)
-                ) {
+                .drawWithContent {
+                    drawContent()
+                    val stroke = borderWidth.toPx()
+                    if (stroke <= 0f || borderColor == Color.Transparent) return@drawWithContent
+
+                    // 统一边框底色
                     drawArc(
-                        color = Color(0xFF00E5FF).copy(alpha = 0.32f),
+                        color = borderColor.copy(alpha = if (isShowingProgress) 0.22f else 1f),
                         startAngle = -90f,
                         sweepAngle = 360f,
                         useCenter = false,
-                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                        style = Stroke(width = stroke, cap = StrokeCap.Round)
                     )
-                    drawArc(
-                        color = Color(0xFF00E5FF),
-                        startAngle = -90f,
-                        sweepAngle = 360f * displayedProgress,
-                        useCenter = false,
-                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
-                    )
-                }
-            }
 
+                    if (isShowingProgress) {
+                        val doneSweep = 360f * displayedProgress.coerceIn(0f, 1f)
+                        val missingSweep = (360f - doneSweep).coerceIn(0f, 360f)
+
+                        // 用“缺口”表达剩余进度：缺口越小，越接近完成
+                        if (missingSweep > 0.8f) {
+                            drawArc(
+                                color = avatarBgColor,
+                                startAngle = -90f + doneSweep,
+                                sweepAngle = missingSweep,
+                                useCenter = false,
+                                style = Stroke(width = stroke + 0.6.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                        }
+                    }
+                }
+                .background(avatarBgColor, CircleShape)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
             Icon(
                 imageVector = if (isPlayer) Icons.Default.Person else Icons.Default.Computer,
                 contentDescription = null,

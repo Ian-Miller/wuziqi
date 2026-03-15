@@ -36,6 +36,7 @@ pub const MAX_CHILDREN_MEDIUM: usize = 12;
 
 /// 每隔多少次迭代检查一次时间（should_stop 每次都检查）
 const TIME_CHECK_INTERVAL: u32 = 64;
+const PROGRESS_HEARTBEAT_INTERVAL: u32 = 32;
 
 /// 进度回调节流参数（避免 JNI 高频调用影响算力）
 const PROGRESS_REPORT_INTERVAL_MS: u64 = 100;
@@ -194,6 +195,41 @@ impl MctsAi {
         }
     }
 
+    /// 心跳：统一处理取消、时间检查、低频进度上报
+    /// 返回 false 表示应立即停止搜索。
+    fn heartbeat(
+        &self,
+        iter_count: u32,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+        last_report_ms: &mut u64,
+        last_report_percent: &mut i32,
+    ) -> bool {
+        // 协作取消：每次迭代都检查 should_stop（保证快速响应）
+        if self.should_stop.load(Ordering::Acquire) {
+            return false;
+        }
+
+        if iter_count % TIME_CHECK_INTERVAL == 0
+            && self.elapsed_ms() >= self.config.time_limit_ms
+        {
+            return false;
+        }
+
+        if iter_count % PROGRESS_HEARTBEAT_INTERVAL == 0 {
+            let t_progress = ((self.elapsed_ms() as f64 / self.config.time_limit_ms.max(1) as f64) * 97.0)
+                .round() as i32;
+            self.maybe_report_progress(
+                on_progress,
+                t_progress.clamp(0, 97),
+                last_report_ms,
+                last_report_percent,
+                false,
+            );
+        }
+
+        true
+    }
+
     pub fn take_turn_with_progress(
         &mut self,
         board: &Board,
@@ -317,26 +353,9 @@ impl MctsAi {
         let mut iter_count: u32 = 0;
 
         loop {
-            // 协作取消：每次迭代都检查 should_stop（保证快速响应）
-            if self.should_stop.load(Ordering::Acquire) {
+            if !self.heartbeat(iter_count, on_progress, last_report_ms, last_report_percent) {
                 break;
             }
-            // 时间检查：按间隔检查，避免频繁调用系统时间
-            if iter_count % TIME_CHECK_INTERVAL == 0
-                && self.elapsed_ms() >= self.config.time_limit_ms
-            {
-                break;
-            }
-
-            let t_progress = ((self.elapsed_ms() as f64 / self.config.time_limit_ms.max(1) as f64) * 97.0)
-                .round() as i32;
-            self.maybe_report_progress(
-                on_progress,
-                t_progress.clamp(0, 97),
-                last_report_ms,
-                last_report_percent,
-                false,
-            );
             iter_count += 1;
 
             // 每次迭代：Selection → Expansion → Evaluation → Backpropagation
