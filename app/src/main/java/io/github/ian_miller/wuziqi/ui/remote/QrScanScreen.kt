@@ -31,7 +31,10 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /**
  * 全屏 QR 码扫描界面（CameraX + ML Kit）。
@@ -144,74 +147,94 @@ fun QrScannerScreen(
 private fun CameraPreviewWithScanner(onScanned: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scanned = remember { mutableStateOf(false) }
 
-    // 持有 CameraProvider 引用，Composable 离开时关闭相机
-    val cameraProviderRef = remember { AtomicReference<ProcessCameraProvider?>(null) }
-    DisposableEffect(Unit) {
-        onDispose { cameraProviderRef.get()?.unbindAll() }
+    // rememberUpdatedState 确保 LaunchedEffect 始终拿到最新的回调引用
+    val onScannedUpdated = rememberUpdatedState(onScanned)
+
+    // PreviewView 在 remember 中创建，与 factory 解耦，避免在合成阶段触发相机初始化
+    val previewView = remember { PreviewView(context) }
+
+    // 原子布尔，线程安全，替代 Compose MutableState——避免在异步回调中读写 Snapshot
+    val scanned = remember { AtomicBoolean(false) }
+
+    // LaunchedEffect 负责相机绑定：在合成完成后、协程上下文中执行，生命周期安全
+    LaunchedEffect(lifecycleOwner) {
+        // suspendCancellableCoroutine 将 ListenableFuture 包装为协程，
+        // 避免 addListener 回调在合成阶段同步触发（华为等厂商设备上已实测会导致 NPE）
+        val cameraProvider = try {
+            suspendCancellableCoroutine { cont ->
+                val future = ProcessCameraProvider.getInstance(context)
+                future.addListener(
+                    {
+                        try {
+                            cont.resume(future.get())
+                        } catch (e: Exception) {
+                            cont.resumeWithException(e)
+                        }
+                    },
+                    ContextCompat.getMainExecutor(context),
+                )
+            }
+        } catch (e: Exception) {
+            return@LaunchedEffect
+        }
+
+        val preview = Preview.Builder().build().also {
+            it.setSurfaceProvider(previewView.surfaceProvider)
+        }
+
+        val barcodeScanner = BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
+        )
+
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+            .also { ia ->
+                ia.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
+                    val mediaImage = imageProxy.image
+                    if (mediaImage != null && !scanned.get()) {
+                        val image = InputImage.fromMediaImage(
+                            mediaImage,
+                            imageProxy.imageInfo.rotationDegrees,
+                        )
+                        barcodeScanner.process(image)
+                            .addOnSuccessListener { barcodes ->
+                                barcodes.firstOrNull()?.rawValue?.let { code ->
+                                    // compareAndSet 保证只触发一次，线程安全
+                                    if (scanned.compareAndSet(false, true)) {
+                                        onScannedUpdated.value(code)
+                                    }
+                                }
+                            }
+                            .addOnCompleteListener { imageProxy.close() }
+                    } else {
+                        imageProxy.close()
+                    }
+                }
+            }
+
+        try {
+            cameraProvider.unbindAll()
+            cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                analysis,
+            )
+        } catch (_: Exception) {
+            // 生命周期异常（如 Activity 正在销毁）静默处理
+        }
+
+        // 协程取消时（离开屏幕）释放相机
+        kotlinx.coroutines.awaitCancellation()
     }
 
+    // factory 只负责返回已创建的 PreviewView，不做任何相机初始化
     AndroidView(
         modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            val executor = ContextCompat.getMainExecutor(ctx)
-
-            val barcodeScanner = BarcodeScanning.getClient(
-                BarcodeScannerOptions.Builder()
-                    .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                    .build()
-            )
-
-            val providerFuture = ProcessCameraProvider.getInstance(ctx)
-            providerFuture.addListener({
-                val provider = providerFuture.get()
-                cameraProviderRef.set(provider)
-
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
-
-                val analysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-                    .also { ia ->
-                        ia.setAnalyzer(executor) { imageProxy ->
-                            val mediaImage = imageProxy.image
-                            if (mediaImage != null && !scanned.value) {
-                                val image = InputImage.fromMediaImage(
-                                    mediaImage,
-                                    imageProxy.imageInfo.rotationDegrees,
-                                )
-                                barcodeScanner.process(image)
-                                    .addOnSuccessListener { barcodes ->
-                                        barcodes.firstOrNull()?.rawValue?.let { code ->
-                                            if (!scanned.value) {
-                                                scanned.value = true
-                                                onScanned(code)
-                                            }
-                                        }
-                                    }
-                                    .addOnCompleteListener { imageProxy.close() }
-                            } else {
-                                imageProxy.close()
-                            }
-                        }
-                    }
-
-                runCatching {
-                    provider.unbindAll()
-                    provider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        analysis,
-                    )
-                }
-            }, executor)
-
-            previewView
-        },
+        factory = { previewView },
     )
 }
