@@ -1,6 +1,8 @@
 package io.github.ian_miller.wuziqi.ui.remote
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +16,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -27,7 +30,13 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import io.github.ian_miller.wuziqi.ui.theme.AppStrings
 import io.github.ian_miller.wuziqi.ui.theme.LocalStrings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 
 /**
  * 加入对局页面（路由: remote_join）
@@ -117,11 +126,13 @@ fun RemoteJoinScreen(
                 is RemotePhase.WaitingForOpponent ->
                     RemoteWaitingContent(message = s.waitingHost)
 
-                is RemotePhase.Error ->
+                is RemotePhase.Error -> {
+                    val msg = resolveErrorMessage(phase, s)
                     RemoteErrorContent(
-                        message = phase.message,
+                        message = msg,
                         onRetry = viewModel::startJoining,
                     )
+                }
 
                 else -> RemoteWaitingContent(message = s.preparing)
             }
@@ -141,8 +152,10 @@ private fun RemoteJoiningContent(
 ) {
     val context = LocalContext.current
     val s = LocalStrings.current
+    val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isScanning by remember { mutableStateOf(false) }
 
     // 显示错误提示 Snackbar
     LaunchedEffect(errorMessage) {
@@ -157,38 +170,16 @@ private fun RemoteJoiningContent(
         ActivityResultContracts.GetContent()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-
-        // 手动加载位图再转 InputImage，避免 InputImage.fromFilePath()
-        // 在 Android 13+ Photo Picker 返回的 content:// URI 上多次打开流失败
-        val bitmap = try {
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream)
+        isScanning = true
+        scope.launch {
+            val (code, error) = decodeQrFromGallery(context, uri, s)
+            isScanning = false
+            if (code != null) {
+                onJoinCode(code)
+            } else {
+                errorMessage = error
             }
-        } catch (_: Exception) { null }
-
-        if (bitmap == null) {
-            errorMessage = s.qrScanFailed
-            return@rememberLauncherForActivityResult
         }
-
-        val image = InputImage.fromBitmap(bitmap, 0)
-        val scanner = BarcodeScanning.getClient(
-            BarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                .build()
-        )
-        scanner.process(image)
-            .addOnSuccessListener { barcodes ->
-                val code = barcodes.firstOrNull()?.rawValue
-                if (code != null) {
-                    onJoinCode(code)
-                } else {
-                    errorMessage = s.qrNotFound
-                }
-            }
-            .addOnFailureListener {
-                errorMessage = s.qrScanFailed
-            }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -286,6 +277,7 @@ private fun RemoteJoiningContent(
                         // 相册按钮
                         OutlinedButton(
                             onClick = { galleryLauncher.launch("image/*") },
+                            enabled = !isScanning,
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp),
@@ -293,7 +285,11 @@ private fun RemoteJoiningContent(
                             border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF5D4037)),
                             shape = RoundedCornerShape(12.dp),
                         ) {
-                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                            if (isScanning) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                            }
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(s.gallery, maxLines = 1)
                         }
@@ -329,4 +325,88 @@ private fun RemoteJoiningContent(
             modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
         )
     }
+}
+
+// ── 公共：ErrorType → 本地化字符串 ─────────────────────────────────────────────
+
+/** 将 [RemotePhase.Error] 的 type 转为本地化消息。同一逻辑供 JoinScreen / LobbyScreen 复用。 */
+internal fun resolveErrorMessage(error: RemotePhase.Error, s: AppStrings): String =
+    when (error.type) {
+        RemoteErrorType.INVALID_LAN_CODE    -> s.inviteCodeInvalidLan
+        RemoteErrorType.INVALID_NOSTR_CODE  -> s.connectionFailed
+        RemoteErrorType.CONNECTION_TIMEOUT   -> s.connectionTimeoutMsg
+        RemoteErrorType.NO_NETWORK           -> s.networkUnavailableMsg
+        RemoteErrorType.RELAY_UNAVAILABLE    -> s.relayUnavailableMsg
+        RemoteErrorType.VERSION_MISMATCH     -> s.versionMismatchMsg
+        RemoteErrorType.GENERIC              -> error.message.ifBlank { s.connectionFailed }
+    }
+
+// ── 相册 QR 解码（后台线程） ──────────────────────────────────────────────────
+
+/**
+ * 在 IO 线程加载位图，用 ML Kit 解码 QR。
+ *
+ * 比直接在主线程调用更可靠：
+ * - 强制 ARGB_8888 配置，避免 hardware bitmap 导致 ML Kit 无法读取像素
+ * - 对超大图片做 inSampleSize 降采样，降低内存压力
+ * - 返回详细的失败信息帮助用户排查
+ *
+ * @return Pair(qrContent, errorMessage)；成功时 first 非空，失败时 second 非空
+ */
+private suspend fun decodeQrFromGallery(
+    context: android.content.Context,
+    uri: Uri,
+    s: AppStrings,
+): Pair<String?, String?> {
+    // ── 1. 读取图片尺寸（不加载像素）──────────────────────────────────────────
+    val (rawW, rawH) = withContext(Dispatchers.IO) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        bounds.outWidth to bounds.outHeight
+    }
+    if (rawW <= 0 || rawH <= 0) {
+        return Pair(null, s.qrImageLoadFailed)
+    }
+
+    // ── 2. 计算降采样倍率（限制最大边 ≤ 1920） ───────────────────────────────
+    var sampleSize = 1
+    val maxDim = maxOf(rawW, rawH)
+    while (maxDim / sampleSize > 1920) sampleSize *= 2
+
+    // ── 3. 加载位图（IO 线程，ARGB_8888 强制软件位图）──────────────────────
+    val bitmap: Bitmap = withContext(Dispatchers.IO) {
+        val opts = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inSampleSize = sampleSize
+        }
+        try {
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, opts)
+            }
+        } catch (_: Exception) { null }
+    } ?: return Pair(null, s.qrImageLoadFailed)
+
+    // ── 4. ML Kit 扫描 ──────────────────────────────────────────────────────
+    val image = InputImage.fromBitmap(bitmap, 0)
+    val scanner = BarcodeScanning.getClient(
+        BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .build()
+    )
+    val code = suspendCancellableCoroutine { cont ->
+        scanner.process(image)
+            .addOnSuccessListener { barcodes -> cont.resume(barcodes.firstOrNull()?.rawValue) }
+            .addOnFailureListener { cont.resume(null) }
+    }
+    bitmap.recycle()
+
+    if (code != null) return Pair(code, null)
+
+    // ── 5. 未检测到：给出详细提示 ───────────────────────────────────────────
+    return Pair(
+        null,
+        "${s.qrNotFound}\n${s.qrNotFoundDetail}\n(${rawW}×${rawH})",
+    )
 }

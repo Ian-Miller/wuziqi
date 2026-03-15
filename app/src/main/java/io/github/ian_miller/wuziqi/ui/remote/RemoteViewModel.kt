@@ -21,6 +21,18 @@ import kotlinx.serialization.encodeToString
 import java.util.UUID
 import javax.inject.Inject
 
+// ── 错误类型（UI 层根据 type 显示本地化字符串） ────────────────────────────────
+
+enum class RemoteErrorType {
+    GENERIC,              // 通用错误（使用 message 原文）
+    INVALID_LAN_CODE,     // 局域网邀请码格式错误
+    INVALID_NOSTR_CODE,   // 线上邀请码格式错误
+    CONNECTION_TIMEOUT,   // 连接超时
+    NO_NETWORK,           // 无法获取本机 IP
+    RELAY_UNAVAILABLE,    // 中继不可用
+    VERSION_MISMATCH,     // 协议版本不兼容
+}
+
 // ── 连接阶段 ───────────────────────────────────────────────────────────────────
 
 sealed class RemotePhase {
@@ -34,7 +46,10 @@ sealed class RemotePhase {
         val myColor: PieceColor,
         val isMyTurn: Boolean,
     ) : RemotePhase()
-    data class Error(val message: String) : RemotePhase()
+    data class Error(
+        val message: String,
+        val type: RemoteErrorType = RemoteErrorType.GENERIC,
+    ) : RemotePhase()
 }
 
 // ── 棋局状态 ───────────────────────────────────────────────────────────────────
@@ -225,8 +240,8 @@ class RemoteViewModel @Inject constructor(
                     GameMsg(MsgType.RESYNC_REQUEST, gameId = gs.gameId, seq = gs.mySeq)
                 )
             } else {
-                // 初次连接：发送 JOIN
-                lanBridge?.send(GameMsg(MsgType.JOIN, gameId = lanGameId, seq = 0))
+                // 初次连接：发送 JOIN（携带协议版本）
+                lanBridge?.send(GameMsg(MsgType.JOIN, gameId = lanGameId, seq = 0, version = PROTOCOL_VERSION))
             }
         }
     }
@@ -352,7 +367,7 @@ class RemoteViewModel @Inject constructor(
 
     fun createRoom() {
         if (_state.value.nostrAvailable == false) {
-            _state.update { it.copy(phase = RemotePhase.Error("中继不可用。请使用局域网模式，或手动重试中继连接。")) }
+            _state.update { it.copy(phase = RemotePhase.Error("", RemoteErrorType.RELAY_UNAVAILABLE)) }
             return
         }
         val gameId = UUID.randomUUID().toString().replace("-", "").take(16)
@@ -384,7 +399,7 @@ class RemoteViewModel @Inject constructor(
             joinRoomLan(code)
         } else {
             if (_state.value.nostrAvailable == false || isRelayBlockedPermanently()) {
-                _state.update { it.copy(phase = RemotePhase.Error("中继不可用，无法加入线上房间。请改用局域网模式。")) }
+                _state.update { it.copy(phase = RemotePhase.Error("", RemoteErrorType.RELAY_UNAVAILABLE)) }
                 return
             }
             joinRoomNostr(code)
@@ -399,7 +414,7 @@ class RemoteViewModel @Inject constructor(
         val gameId = UUID.randomUUID().toString().replace("-", "").take(16)
         val ip = getLocalIpAddress() ?: run {
             _state.update {
-                it.copy(phase = RemotePhase.Error("无法获取本机局域网 IP，请确认已连接 WiFi 或已开启热点"))
+                it.copy(phase = RemotePhase.Error("", RemoteErrorType.NO_NETWORK))
             }
             return
         }
@@ -444,7 +459,7 @@ class RemoteViewModel @Inject constructor(
 
     private fun joinRoomLan(code: String) {
         val decoded = LanInviteCode.decode(code) ?: run {
-            _state.update { it.copy(phase = RemotePhase.Error("局域网邀请码格式错误")) }
+            _state.update { it.copy(phase = RemotePhase.Error("", RemoteErrorType.INVALID_LAN_CODE)) }
             return
         }
         val (gameId, ip, port) = decoded
@@ -470,7 +485,7 @@ class RemoteViewModel @Inject constructor(
                 lanBridge?.close()
                 lanBridge = null
                 _state.update {
-                    it.copy(phase = RemotePhase.Error("连接超时，请确认房主已创建房间且双方在同一网络"))
+                    it.copy(phase = RemotePhase.Error("", RemoteErrorType.CONNECTION_TIMEOUT))
                 }
             }
         }
@@ -480,7 +495,14 @@ class RemoteViewModel @Inject constructor(
         when (_state.value.phase) {
             is RemotePhase.Creating -> {
                 if (msg.type == MsgType.JOIN && msg.gameId == lanGameId) {
-                    val ack = GameMsg(MsgType.JOIN_ACK, gameId = lanGameId, seq = 1)
+                    // 检查对方协议版本
+                    if (msg.version != 0 && msg.version != PROTOCOL_VERSION) {
+                        _state.update {
+                            it.copy(phase = RemotePhase.Error("", RemoteErrorType.VERSION_MISMATCH))
+                        }
+                        return
+                    }
+                    val ack = GameMsg(MsgType.JOIN_ACK, gameId = lanGameId, seq = 1, version = PROTOCOL_VERSION)
                     lanBridge?.send(ack)
                     _state.update {
                         it.copy(
@@ -497,6 +519,16 @@ class RemoteViewModel @Inject constructor(
             is RemotePhase.WaitingForOpponent -> {
                 if (msg.type == MsgType.JOIN_ACK) {
                     joinTimeoutJob?.cancel()
+                    // 检查对方协议版本
+                    if (msg.version != 0 && msg.version != PROTOCOL_VERSION) {
+                        reconnectJob?.cancel()
+                        lanBridge?.close()
+                        lanBridge = null
+                        _state.update {
+                            it.copy(phase = RemotePhase.Error("", RemoteErrorType.VERSION_MISMATCH))
+                        }
+                        return
+                    }
                     val gameId = msg.gameId.ifBlank { lanGameId }
                     _state.update {
                         it.copy(
@@ -520,13 +552,13 @@ class RemoteViewModel @Inject constructor(
     private fun joinRoomNostr(code: String) {
         val decoded = InviteCode.decode(code)
         if (decoded == null) {
-            _state.update { it.copy(phase = RemotePhase.Error("邀请码格式错误，请检查后重试")) }
+            _state.update { it.copy(phase = RemotePhase.Error("", RemoteErrorType.INVALID_NOSTR_CODE)) }
             return
         }
         val (hostPubkey, gameId) = decoded
         client.subscribe(gameId)
         runCatching {
-            val msg = GameMsg(MsgType.JOIN, gameId = gameId, seq = 0)
+            val msg = GameMsg(MsgType.JOIN, gameId = gameId, seq = 0, version = PROTOCOL_VERSION)
             val encrypted = GomokuCrypto.encrypt(
                 keyPair.privateKey, hostPubkey.hexToBytes(), JsonCodec.encodeToString(msg)
             )

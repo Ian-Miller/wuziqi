@@ -36,6 +36,9 @@ enum class MsgType {
  * @param boardHash 当前棋盘 SHA256，用于完整性校验；为空时跳过校验
  * @param moves     RESYNC 时携带完整落子列表，格式 "row,col,BLACK|row,col,WHITE|..."
  */
+/** 当前协议版本号。修改不兼容的消息结构时递增。 */
+const val PROTOCOL_VERSION = 1
+
 @Serializable
 data class GameMsg(
     val type: MsgType,
@@ -45,6 +48,8 @@ data class GameMsg(
     val col: Int = -1,
     val boardHash: String = "",
     val moves: List<String> = emptyList(),
+    /** 发送方的协议版本号；旧版本不发送此字段，默认 0 */
+    val version: Int = 0,
 )
 
 // ── JSON 编解码器 ──────────────────────────────────────────────────────────────

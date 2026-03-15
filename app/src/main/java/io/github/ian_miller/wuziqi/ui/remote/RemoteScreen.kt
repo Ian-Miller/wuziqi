@@ -122,8 +122,11 @@ fun RemoteLobbyScreen(
                         onEnd = { viewModel.resignRemote(); viewModel.reset() },
                     )
 
-                is RemotePhase.Error ->
-                    RemoteErrorContent(message = p.message, onRetry = viewModel::reset)
+                is RemotePhase.Error -> {
+                    val s = LocalStrings.current
+                    val msg = resolveErrorMessage(p, s)
+                    RemoteErrorContent(message = msg, onRetry = viewModel::reset)
+                }
 
                 else ->
                     RemoteWaitingContent(message = LocalStrings.current.remoteProcessing)
