@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,6 +48,7 @@ fun SettingsDialog(
     vibrationEnabled: Boolean,
     undoEnabled: Boolean,
     aiAssistEnabled: Boolean,
+    magnifierEnabled: Boolean = true,
     isMainMenu: Boolean,
     hasSavedSinglePlayerGame: Boolean = false,
     language: String = "auto",
@@ -56,6 +58,7 @@ fun SettingsDialog(
     onToggleVibration: (Boolean) -> Unit,
     onToggleUndo: (Boolean) -> Unit,
     onToggleAiAssist: (Boolean) -> Unit,
+    onToggleMagnifier: (Boolean) -> Unit = {},
     onSetLanguage: ((String) -> Unit)? = null,
     onStopGame: (() -> Unit)? = null,
     onExitGame: (() -> Unit)? = null
@@ -131,6 +134,8 @@ fun SettingsDialog(
                 val isAiAssistEditable = gameStatus != GameStatus.PLAYING
                 SettingsSwitchRow(s.aiAssist, Icons.Filled.Assessment, aiAssistEnabled, onToggleAiAssist, enabled = isAiAssistEditable)
             }
+            
+            SettingsSwitchRow(s.magnifier, Icons.Filled.ZoomIn, magnifierEnabled, onToggleMagnifier)
 
             // Language selector (only shown from main menu where onSetLanguage is provided)
             if (onSetLanguage != null) {

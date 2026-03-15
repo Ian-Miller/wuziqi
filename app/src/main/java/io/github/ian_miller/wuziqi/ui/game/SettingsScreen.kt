@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Vibration
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -131,6 +132,13 @@ fun SettingsScreen(
                         icon = Icons.Filled.Assessment,
                         checked = uiState.aiAssistEnabled,
                         onCheckedChange = { viewModel.setAiAssistEnabled(it) }
+                    )
+                    HorizontalDivider(color = Color(0xFF8D6E63).copy(alpha = 0.3f))
+                    SettingsSwitchRow(
+                        text = s.magnifier,
+                        icon = Icons.Filled.ZoomIn,
+                        checked = uiState.magnifierEnabled,
+                        onCheckedChange = { viewModel.setMagnifierEnabled(it) }
                     )
                 }
 

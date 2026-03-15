@@ -5,9 +5,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
@@ -18,6 +19,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -40,6 +42,7 @@ fun RemoteJoinScreen(
     viewModel: RemoteViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+    val s = LocalStrings.current
     var showScanner by remember { mutableStateOf(false) }
 
     // 系统返回键：取消加入
@@ -76,16 +79,16 @@ fun RemoteJoinScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(LocalStrings.current.joiningRoom, fontWeight = FontWeight.Bold) },
+                title = { Text(s.joiningRoom, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = { viewModel.cancelJoining(); onBack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF5D4037),
-                    titleContentColor = Color(0xFFFFE082),
-                    navigationIconContentColor = Color(0xFFFFE082),
+                    containerColor = Color(0xFFE0C39E),
+                    titleContentColor = Color(0xFF3E2723),
+                    navigationIconContentColor = Color(0xFF3E2723),
                 ),
             )
         },
@@ -111,7 +114,7 @@ fun RemoteJoinScreen(
                     )
 
                 is RemotePhase.WaitingForOpponent ->
-                    RemoteWaitingContent(message = "等待房主确认…")
+                    RemoteWaitingContent(message = s.waitingHost)
 
                 is RemotePhase.Error ->
                     RemoteErrorContent(
@@ -119,7 +122,7 @@ fun RemoteJoinScreen(
                         onRetry = viewModel::startJoining,
                     )
 
-                else -> RemoteWaitingContent(message = "准备中…")
+                else -> RemoteWaitingContent(message = s.preparing)
             }
         }
     }
@@ -136,6 +139,17 @@ private fun RemoteJoiningContent(
     onJoinCode: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val s = LocalStrings.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // 显示错误提示 Snackbar
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
+            errorMessage = null
+        }
+    }
 
     // 从相册选图并用 ML Kit 解码 QR
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -151,112 +165,157 @@ private fun RemoteJoiningContent(
             )
             scanner.process(image)
                 .addOnSuccessListener { barcodes ->
-                    barcodes.firstOrNull()?.rawValue?.let { onJoinCode(it) }
+                    val code = barcodes.firstOrNull()?.rawValue
+                    if (code != null) {
+                        onJoinCode(code)
+                    } else {
+                        errorMessage = s.qrNotFound
+                    }
                 }
+                .addOnFailureListener {
+                    errorMessage = s.qrScanFailed
+                }
+        }.onFailure {
+            errorMessage = s.qrScanFailed
         }
     }
-    val s = LocalStrings.current
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 28.dp, vertical = 40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(
-            text = "输入邀请码",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF3E2723),
-        )
-        Text(
-            text = "将好友发送的邀请码粘贴在此处，\n或扫描 QR 码直接加入",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF5D4037),
-            modifier = Modifier.padding(top = 8.dp, bottom = 28.dp),
-        )
 
-        // 邀请码输入框
-        OutlinedTextField(
-            value = inputCode,
-            onValueChange = onCodeChanged,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("邀请码") },
-            placeholder = { Text("粘贴邀请码…") },
-            singleLine = false,
-            maxLines = 4,
-            trailingIcon = {
-                IconButton(onClick = onScan) {
-                    Icon(
-                        Icons.Default.QrCodeScanner,
-                        contentDescription = "扫描 QR 码",
-                        tint = Color(0xFF5D4037),
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            // 标题卡片
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFFFF8E1).copy(alpha = 0.95f)
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = s.inputInviteCode,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF3E2723),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = s.inputInviteCodeHint,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF5D4037),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
                     )
                 }
-            },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Color(0xFF5D4037),
-                unfocusedBorderColor = Color(0xFF8D6E63),
-                focusedLabelColor = Color(0xFF5D4037),
-                cursorColor = Color(0xFF5D4037),
-            ),
-        )
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // 操作按钮行
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // 扫码按钮
-            OutlinedButton(
-                onClick = onScan,
-                modifier = Modifier
-                    .weight(1f)
-                    .sizeIn(minHeight = 52.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF5D4037)),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF5D4037)),
-                shape = MaterialTheme.shapes.large,
-            ) {
-                Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(s.scanQr, maxLines = 1)
             }
 
-            // 相册按钮
-            OutlinedButton(
-                onClick = { galleryLauncher.launch("image/*") },
-                modifier = Modifier
-                    .weight(1f)
-                    .sizeIn(minHeight = 52.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF5D4037)),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF5D4037)),
-                shape = MaterialTheme.shapes.large,
-            ) {
-                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(s.gallery, maxLines = 1)
-            }
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // 加入按钮
-            Button(
-                onClick = onJoin,
-                modifier = Modifier
-                    .weight(2f)
-                    .sizeIn(minHeight = 52.dp),
-                enabled = inputCode.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF5D4037),
-                    contentColor = Color(0xFFFFE082),
+            // 输入框卡片
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFFFF8E1).copy(alpha = 0.95f)
                 ),
-                shape = MaterialTheme.shapes.large,
-                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
             ) {
-                Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(s.joinGame, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // 邀请码输入框（移除 trailingIcon 的扫码按钮，避免重复）
+                    OutlinedTextField(
+                        value = inputCode,
+                        onValueChange = onCodeChanged,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(s.inviteCodeLabel) },
+                        placeholder = { Text(s.pasteInviteCode) },
+                        singleLine = false,
+                        maxLines = 4,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF5D4037),
+                            unfocusedBorderColor = Color(0xFF8D6E63),
+                            focusedLabelColor = Color(0xFF5D4037),
+                            cursorColor = Color(0xFF5D4037),
+                        ),
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // 操作按钮行
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        // 扫码按钮
+                        OutlinedButton(
+                            onClick = onScan,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF5D4037)),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF5D4037)),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(s.scanQr, maxLines = 1)
+                        }
+
+                        // 相册按钮
+                        OutlinedButton(
+                            onClick = { galleryLauncher.launch("image/*") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF5D4037)),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF5D4037)),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(s.gallery, maxLines = 1)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 加入按钮（独占一行，更突出）
+                    Button(
+                        onClick = onJoin,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        enabled = inputCode.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF5D4037),
+                            contentColor = Color(0xFFFFE082),
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(s.joinGame, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                    }
+                }
             }
         }
+
+        // Snackbar 位于底部
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+        )
     }
 }

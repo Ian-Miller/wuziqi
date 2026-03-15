@@ -41,6 +41,7 @@ class MenuViewModel @Inject constructor(
         val vibrationEnabled: Boolean = true,
         val undoEnabled: Boolean = true,
         val aiAssistEnabled: Boolean = false,
+        val magnifierEnabled: Boolean = true,
         val showSettings: Boolean = false,
         val showStats: Boolean = false,
         val showPlayerSelection: Boolean = false,
@@ -79,6 +80,7 @@ class MenuViewModel @Inject constructor(
             vibrationEnabled = prefs.getBoolean("vibration_enabled", true),
             undoEnabled = prefs.getBoolean("undo_enabled", true),
             aiAssistEnabled = prefs.getBoolean("ai_assist_enabled", false),
+            magnifierEnabled = prefs.getBoolean("magnifier_enabled", true),
             language = prefs.getString("language", "auto") ?: "auto",
         )
     }
@@ -116,6 +118,11 @@ class MenuViewModel @Inject constructor(
     fun setAiAssistEnabled(enabled: Boolean) {
         prefs.edit { putBoolean("ai_assist_enabled", enabled) }
         _uiState.update { it.copy(aiAssistEnabled = enabled) }
+    }
+
+    fun setMagnifierEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean("magnifier_enabled", enabled) }
+        _uiState.update { it.copy(magnifierEnabled = enabled) }
     }
 
     fun showSettings() = _uiState.update { it.copy(showSettings = true) }

@@ -192,6 +192,7 @@ private fun GameAppContent(menuViewModel: MenuViewModel) {
                 val vm: RemoteViewModel = hiltViewModel(parentEntry)
                 RemoteGameScreen(
                     viewModel = vm,
+                    menuViewModel = menuViewModel,
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -567,6 +568,8 @@ fun ActiveGameScreen(
 ) {
     val model by viewModel.uiModel.collectAsState()
     val selectedPlayer by menuViewModel?.selectedPlayer?.collectAsState() ?: remember { mutableStateOf(null) }
+    val menuState by menuViewModel?.uiState?.collectAsState() ?: remember { mutableStateOf(MenuViewModel.UiState()) }
+    val magnifierEnabled = menuState.magnifierEnabled
     var magnifierState by remember { mutableStateOf<MagnifierState?>(null) } 
 
     val context = LocalContext.current
@@ -765,7 +768,7 @@ fun ActiveGameScreen(
                         board = model.board,
                         enabled = model.gameStatus == GameStatus.PLAYING && !model.isAiThinking && !isAiTurn,
                         onPlacePiece = { row, col -> viewModel.placePiece(row, col) },
-                        onUpdateMagnifier = { magnifierState = it },
+                        onUpdateMagnifier = { if (magnifierEnabled) magnifierState = it else magnifierState = null },
                         modifier = Modifier.fillMaxSize(),
                         gameStatus = model.gameStatus,
                         isAiThinking = model.isAiThinking,
@@ -890,6 +893,8 @@ fun ActiveGameScreen(
                             onToggleVibration = { viewModel.setVibrationEnabled(it) },
                             onToggleUndo = { viewModel.setUndoEnabled(it) },
                             onToggleAiAssist = { viewModel.setAiAssistEnabled(it) },
+                            magnifierEnabled = menuState.magnifierEnabled,
+                            onToggleMagnifier = { menuViewModel?.setMagnifierEnabled(it) },
                             onSetLanguage = null,
                             onStopGame = if (model.gameStatus == GameStatus.PLAYING) {
                                 { viewModel.stopGame() }

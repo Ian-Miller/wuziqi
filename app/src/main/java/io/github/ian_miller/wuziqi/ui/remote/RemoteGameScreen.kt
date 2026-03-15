@@ -27,6 +27,7 @@ import io.github.ian_miller.wuziqi.ui.game.GlassyButton
 import io.github.ian_miller.wuziqi.ui.game.MagnifierState
 import io.github.ian_miller.wuziqi.ui.game.MagnifierView
 import io.github.ian_miller.wuziqi.ui.game.SinglePlayerGameHud
+import io.github.ian_miller.wuziqi.ui.menu.MenuViewModel
 import io.github.ian_miller.wuziqi.ui.theme.LocalStrings
 
 /**
@@ -43,9 +44,12 @@ import io.github.ian_miller.wuziqi.ui.theme.LocalStrings
 fun RemoteGameScreen(
     onBack: () -> Unit,
     viewModel: RemoteViewModel = hiltViewModel(),
+    menuViewModel: MenuViewModel = hiltViewModel(),
 ) {
     val gs by viewModel.gameState.collectAsState()
     val lanConnected by viewModel.lanPeerConnected.collectAsState()
+    val menuState by menuViewModel.uiState.collectAsState()
+    val magnifierEnabled = menuState.magnifierEnabled
     var magnifierState by remember { mutableStateOf<MagnifierState?>(null) }
 
     // 返回大厅（不结束对局，对局仍保存）
@@ -133,6 +137,18 @@ fun RemoteGameScreen(
                             onCheckedChange = { viewModel.setVibrationEnabled(it) },
                         )
                     }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.ZoomIn, null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(12.dp))
+                        Text(s.magnifier, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = magnifierEnabled,
+                            onCheckedChange = { menuViewModel.setMagnifierEnabled(it) },
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -180,7 +196,7 @@ fun RemoteGameScreen(
                     board = gameState.board,
                     enabled = gameState.isMyTurn && lanConnected,
                     onPlacePiece = { row, col -> viewModel.placePieceRemote(row, col) },
-                    onUpdateMagnifier = { magnifierState = it },
+                    onUpdateMagnifier = { if (magnifierEnabled) magnifierState = it else magnifierState = null },
                     modifier = Modifier.fillMaxSize(),
                     gameStatus = if (gameState.isGameOver) GameStatus.FINISHED else GameStatus.PLAYING,
                     isAiThinking = !gameState.isMyTurn && !gameState.isGameOver,
