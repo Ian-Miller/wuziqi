@@ -85,6 +85,9 @@ fun BoardCanvas(
     var previewPosition by remember { mutableStateOf<Offset?>(null) }
     var previewRow by remember { mutableStateOf<Int?>(null) }
     var previewCol by remember { mutableStateOf<Int?>(null) }
+    // 用 rememberUpdatedState 确保 pointerInput 协程始终调用最新的 lambda，
+    // 避免 magnifierEnabled 改变后旧闭包仍触发放大镜
+    val currentOnUpdateMagnifier by rememberUpdatedState(onUpdateMagnifier)
     
     // AI 预览走法闪烁动画（在 Canvas 外创建）
     val aiPreviewInfiniteTransition = rememberInfiniteTransition(label = "ai_preview_pulse")
@@ -155,7 +158,7 @@ fun BoardCanvas(
                         previewPosition = offset
                     }
 
-                    onUpdateMagnifier(
+                    currentOnUpdateMagnifier(
                         MagnifierState(
                             sourceCenter = offset,
                             sourceBoardWidth = layoutSize.width.toFloat(),
@@ -194,7 +197,7 @@ fun BoardCanvas(
                                 }
                             }
                             
-                            onUpdateMagnifier(
+                            currentOnUpdateMagnifier(
                                 MagnifierState(
                                     sourceCenter = offset,
                                     sourceBoardWidth = layoutSize.width.toFloat(),
@@ -216,7 +219,7 @@ fun BoardCanvas(
                     previewRow = null
                     previewCol = null
                     previewPosition = null
-                    onUpdateMagnifier(null)
+                    currentOnUpdateMagnifier(null)
                 }
             }
         ) {

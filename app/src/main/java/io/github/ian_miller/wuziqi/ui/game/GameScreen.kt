@@ -226,6 +226,7 @@ private fun GameAppContent(menuViewModel: MenuViewModel) {
             
             GameRoute(
                 mode = mode,
+                menuViewModel = menuViewModel,
                 onBack = { navController.popBackStack() }
             )
         }
@@ -237,7 +238,7 @@ fun GameRoute(
     mode: GameMode,
     onBack: () -> Unit,
     viewModel: GameViewModelV2 = hiltViewModel(),
-    menuViewModel: MenuViewModel = hiltViewModel()  // 用于 PvP 保存玩家选择
+    menuViewModel: MenuViewModel = hiltViewModel()
 ) {
     var interactionEnabled by remember { mutableStateOf(true) }
 
