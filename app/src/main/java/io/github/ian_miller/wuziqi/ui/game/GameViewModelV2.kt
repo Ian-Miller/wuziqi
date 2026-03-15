@@ -1307,7 +1307,9 @@ class GameViewModelV2 @Inject constructor(
         cancelAiJob()
         _aiProgress.value = 0f
         val aiColorInt = if (state.aiPlayerColor == PieceColor.BLACK) 1 else 2
+        val minAnimMs = minProgressAnimMs(state.difficulty)
         aiJob = viewModelScope.launch(Dispatchers.Default) {
+            val thinkStart = System.currentTimeMillis()
             try {
                 val ai = getOrCreateRustAi(state.difficulty, aiColorInt)
                 if (ai == null) {
@@ -1321,7 +1323,24 @@ class GameViewModelV2 @Inject constructor(
                     _aiProgress.value = maxOf(_aiProgress.value, p)
                 }
                 if (move != null) {
+                    // 最小动画时长保障：AI 决策过快时，平滑填充进度环再落子。
+                    // 避免 EASY/MEDIUM 即时赢棋的情况下进度环只有一丁点就消失。
+                    val elapsed = System.currentTimeMillis() - thinkStart
+                    val remaining = minAnimMs - elapsed
+                    if (remaining > 40L) {
+                        val startP = _aiProgress.value
+                        val targetP = 0.94f
+                        val steps = (remaining / 40L).toInt().coerceIn(1, 60)
+                        for (i in 1..steps) {
+                            if (!isActive) break
+                            val t = i.toFloat() / steps
+                            _aiProgress.value = startP + (targetP - startP) * t
+                            delay(40L)
+                        }
+                    }
                     _aiProgress.value = 1f
+                    // 短暂等待让 UI 帧渲染出进度环 100% 后再落子（避免帧间撕裂）
+                    delay(40L)
                     sendCommand(Cmd.AiDone(Piece(move.first, move.second, state.aiPlayerColor)))
                 } else {
                     // AI 被取消（invalidate 后返回 null）——通知状态机清理
@@ -1329,11 +1348,23 @@ class GameViewModelV2 @Inject constructor(
                     sendCommand(Cmd.AiCancelled)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                if (e !is kotlinx.coroutines.CancellationException) e.printStackTrace()
                 _aiProgress.value = 0f
                 sendCommand(Cmd.AiCancelled)
             }
         }
+    }
+
+    /**
+     * 每种难度的最小进度环动画时长。
+     * AI 若提前完成（如即时赢棋），会等到此时长后才落子，
+     * 让玩家看到进度环平滑填充，而不是瞬间消失。
+     */
+    private fun minProgressAnimMs(difficulty: Difficulty): Long = when (difficulty) {
+        Difficulty.EASY   -> 550L    // 与 EASY 时间限制（650ms）接近
+        Difficulty.MEDIUM -> 1200L   // MEDIUM 1800ms，留出 1.2s 最短动画
+        Difficulty.HARD   -> 2500L   // HARD 4000ms，确保有足够进度感
+        Difficulty.MASTER -> 4500L   // MASTER 基本总是超过此值，作为安全下限
     }
 
     private fun launchAssistCalculation(state: State.WaitingForPlayer) {

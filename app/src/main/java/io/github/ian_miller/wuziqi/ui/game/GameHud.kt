@@ -436,11 +436,14 @@ fun PlayerAvatar(
                 emaSpeed = emaSpeed * 0.84f + observedSpeed * 0.16f
                 val predictedSpeed = if (reportDelta < 0.0015f) emaSpeed * 0.92f else emaSpeed
 
-                val catchup = (targetProgress - displayedProgress).coerceAtLeast(0f) * 0.24f
+                // targetProgress=1.0 时（AI 落子前）用弹簧力快速补全圆弧，其余保持 EMA 追踪
+                val catchupFactor = if (targetProgress >= 0.999f) 0.62f else 0.24f
+                val catchup = (targetProgress - displayedProgress).coerceAtLeast(0f) * catchupFactor
                 val inertia = predictedSpeed * dt * 0.28f
 
                 var next = displayedProgress + catchup + inertia
                 if (targetProgress < 0.999f) {
+                    // 正常态：最多追进到 97%，保留"快要满"的期待感
                     next = minOf(next, 0.97f)
                 }
                 displayedProgress = next.coerceIn(0f, 1f)
