@@ -36,6 +36,10 @@ const MASTER_REDUNDANT_RADIUS: i32 = 1;
 /// 记录最近若干次决策（主要用于“撤销后反复同手”惩罚）
 const DECISION_HISTORY_CAP: usize = 24;
 
+/// Killer/History Heuristic 参数
+const MAX_PLY: usize = 64;
+const HISTORY_MAX: i32 = 2_000_000;
+
 // ============================================================================
 // 置换表（Transposition Table）
 // ============================================================================
@@ -191,6 +195,10 @@ pub struct GomokuAi {
     last_root_score: i32,
     /// 最近的根节点决策历史：[(root_hash, move)]
     recent_decisions: VecDeque<(u64, (usize, usize))>,
+    /// Killer Moves（每层两个）
+    killer_moves: Vec<[Option<(usize, usize)>; 2]>,
+    /// History Heuristic 分数表 [color_idx][move_idx]
+    history_scores: [[i32; BOARD_SIZE * BOARD_SIZE]; 2],
     /// Zobrist 哈希表（固定不变，在构造时初始化）
     zobrist: ZobristTable,
 }
@@ -206,6 +214,8 @@ impl GomokuAi {
             last_depth_time_ms: 0,
             last_root_score: 0,
             recent_decisions: VecDeque::with_capacity(DECISION_HISTORY_CAP),
+            killer_moves: vec![[None, None]; MAX_PLY],
+            history_scores: [[0; BOARD_SIZE * BOARD_SIZE]; 2],
             zobrist: ZobristTable::new(),
         }
     }
@@ -525,7 +535,7 @@ impl GomokuAi {
     // =========================================================================
 
     fn search_one_depth(
-        &self,
+        &mut self,
         board: &Board,
         moves: &[(usize, usize)],
         depth: i32,
@@ -582,6 +592,7 @@ impl GomokuAi {
                 -alpha,
                 tt,
                 child_hash,
+                1,
             );
 
             // 根节点重复局面惩罚（主要改善撤销/重试时“机械复读同一步”）
@@ -731,7 +742,7 @@ impl GomokuAi {
     // =========================================================================
 
     fn minimax(
-        &self,
+        &mut self,
         board: &Board,
         player: Color,
         depth: i32,
@@ -739,6 +750,7 @@ impl GomokuAi {
         beta: i32,
         tt: &mut TranspositionTable,
         hash: u64,
+        ply: usize,
     ) -> i32 {
         // 每个节点都检查 should_stop（Acquire：确保看到其他线程的 Release 写入）
         if !self.should_continue() {
@@ -792,6 +804,18 @@ impl GomokuAi {
                 if Some((r, c)) == tt_best_move {
                     score += 1_000_000;
                 }
+
+                 // Killer move 优先（非根层）
+                if ply < self.killer_moves.len() {
+                    if self.killer_moves[ply][0] == Some((r, c)) {
+                        score += 140_000;
+                    } else if self.killer_moves[ply][1] == Some((r, c)) {
+                        score += 95_000;
+                    }
+                }
+
+                // History heuristic：累计在剪枝中成功的走法优先
+                score += self.history_bonus(player, r, c);
                 ((r, c), score)
             })
             .collect();
@@ -827,18 +851,18 @@ impl GomokuAi {
             // PVS（Principal Variation Search）
             // 首着全窗口，后续先零窗口探测，必要时再全窗口重搜
             let mut score = if first_move {
-                -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash)
+                -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1)
             } else {
-                let mut s = -self.minimax(&new_board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash);
+                let mut s = -self.minimax(&new_board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash, ply + 1);
                 if s > alpha && s < beta {
-                    s = -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash);
+                    s = -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1);
                 }
                 s
             };
 
             // 若 LMR 降深后出现潜在改进，再用完整深度复核一次
             if reduce > 0 && score > alpha {
-                score = -self.minimax(&new_board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash);
+                score = -self.minimax(&new_board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash, ply + 1);
             }
 
             first_move = false;
@@ -848,6 +872,8 @@ impl GomokuAi {
                 best_move = Some((row, col));
             }
             if alpha >= beta {
+                self.record_killer(ply, (row, col));
+                self.bump_history(player, row, col, depth);
                 // Beta 剪枝 → 下界（LowerBound）
                 tt.set(hash, depth, alpha, best_move, TtFlag::LowerBound);
                 return alpha;
@@ -967,6 +993,49 @@ impl GomokuAi {
         total
     }
 
+    fn player_idx(player: Color) -> usize {
+        if player == Color::Black { 0 } else { 1 }
+    }
+
+    fn move_index(row: usize, col: usize) -> usize {
+        row * BOARD_SIZE + col
+    }
+
+    fn history_bonus(&self, player: Color, row: usize, col: usize) -> i32 {
+        let p = Self::player_idx(player);
+        let idx = Self::move_index(row, col);
+        // 缩放防止盖过战术分
+        self.history_scores[p][idx] / 64
+    }
+
+    fn record_killer(&mut self, ply: usize, mv: (usize, usize)) {
+        if ply >= self.killer_moves.len() {
+            return;
+        }
+        let slot = &mut self.killer_moves[ply];
+        if slot[0] == Some(mv) {
+            return;
+        }
+        slot[1] = slot[0];
+        slot[0] = Some(mv);
+    }
+
+    fn bump_history(&mut self, player: Color, row: usize, col: usize, depth: i32) {
+        let p = Self::player_idx(player);
+        let idx = Self::move_index(row, col);
+        let bonus = (depth.max(1) * depth.max(1) * 40).min(12_000);
+        let v = &mut self.history_scores[p][idx];
+        *v = (*v + bonus).min(HISTORY_MAX);
+    }
+
+    fn decay_history(&mut self) {
+        for p in 0..2 {
+            for v in &mut self.history_scores[p] {
+                *v = (*v * 15) / 16;
+            }
+        }
+    }
+
     /// 线压评估：只从每条连续链的“起点”统计一次，
     /// 结合链长与两端开放性，强化“伏脉千里”的连线布局能力。
     fn line_pressure_eval(&self, board: &Board, player: Color, line_w: i32) -> i32 {
@@ -1084,6 +1153,7 @@ impl GomokuAi {
     pub fn clear(&mut self) {
         self.node_count.store(0, Ordering::Relaxed);
         self.start_time = Instant::now();
+        self.decay_history();
         // 注意：不重置 last_completed_depth / last_depth_time_ms
         // 这两个字段是跨回合历史，只有创建新 AI 对象时才清零
     }
