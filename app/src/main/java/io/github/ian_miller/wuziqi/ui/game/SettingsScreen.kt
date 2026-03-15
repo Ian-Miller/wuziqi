@@ -6,12 +6,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Vibration
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -54,7 +54,7 @@ fun SettingsScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = null,
                             tint = Color(0xFF3E2723)
                         )
@@ -107,7 +107,7 @@ fun SettingsScreen(
                 SettingsPageCard {
                     SettingsSwitchRow(
                         text = s.sound,
-                        icon = Icons.Filled.VolumeUp,
+                        icon = Icons.AutoMirrored.Filled.VolumeUp,
                         checked = uiState.soundEnabled,
                         onCheckedChange = { viewModel.setSoundEnabled(it) }
                     )
@@ -121,7 +121,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = Color(0xFF8D6E63).copy(alpha = 0.3f))
                     SettingsSwitchRow(
                         text = s.allowUndo,
-                        icon = Icons.Filled.Undo,
+                        icon = Icons.AutoMirrored.Filled.Undo,
                         checked = uiState.undoEnabled,
                         onCheckedChange = { viewModel.setUndoEnabled(it) }
                     )
