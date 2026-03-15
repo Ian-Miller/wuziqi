@@ -1,0 +1,335 @@
+{
+  "version": "1.0.0",
+  "description": "五子棋AI参数配置文件",
+  "lastUpdated": "2025-02-25",
+  
+  "difficulties": {
+    "beginner": {
+      "name": "新手",
+      "description": "适合初学者的简单对手，模拟真实新手的认知局限",
+      "searchDepth": 2,
+      "searchWidth": 8,
+      "quiescenceDepth": 0,
+      "timeLimitMs": 1000,
+      "evaluationPrecision": "LOW",
+      "randomness": 0.4,
+      "threatSensitivity": 0.3,
+      "aggression": 0.4,
+      "centerControlWeight": 0.5,
+      "useOpeningBook": true,
+      "useKillerHeuristic": false,
+      "useTranspositionTable": false,
+      "useNullMovePruning": false,
+      "useIterativeDeepening": false,
+      "useThreatSpaceAnalysis": false,
+      "useInfluenceGraph": false,
+      "useProbabilisticEval": false,
+      "useNListening": false,
+      "trapDetectionDepth": 0,
+      "strategicPlanning": false
+    },
+    "intermediate": {
+      "name": "普通",
+      "description": "有一定水平的对手",
+      "searchDepth": 4,
+      "searchWidth": 12,
+      "quiescenceDepth": 2,
+      "timeLimitMs": 3000,
+      "evaluationPrecision": "MEDIUM",
+      "randomness": 0.2,
+      "threatSensitivity": 0.6,
+      "aggression": 0.5,
+      "centerControlWeight": 0.7,
+      "useOpeningBook": true,
+      "useKillerHeuristic": true,
+      "useTranspositionTable": true,
+      "useNullMovePruning": false,
+      "useIterativeDeepening": true,
+      "useThreatSpaceAnalysis": true,
+      "useInfluenceGraph": false,
+      "useProbabilisticEval": false,
+      "useNListening": false,
+      "trapDetectionDepth": 2,
+      "strategicPlanning": false
+    },
+    "advanced": {
+      "name": "困难",
+      "description": "善用战术的强劲对手",
+      "searchDepth": 6,
+      "searchWidth": 16,
+      "quiescenceDepth": 4,
+      "timeLimitMs": 5000,
+      "evaluationPrecision": "HIGH",
+      "randomness": 0.05,
+      "threatSensitivity": 0.8,
+      "aggression": 0.6,
+      "centerControlWeight": 0.8,
+      "useOpeningBook": true,
+      "useKillerHeuristic": true,
+      "useTranspositionTable": true,
+      "useNullMovePruning": true,
+      "useIterativeDeepening": true,
+      "useThreatSpaceAnalysis": true,
+      "useInfluenceGraph": true,
+      "useProbabilisticEval": true,
+      "useNListening": true,
+      "trapDetectionDepth": 4,
+      "strategicPlanning": true
+    },
+    "master": {
+      "name": "大师",
+      "description": "最强对手，深谙棋道，具备极高侵略性",
+      "searchDepth": 8,
+      "searchWidth": 20,
+      "quiescenceDepth": 6,
+      "timeLimitMs": 10000,
+      "evaluationPrecision": "ULTRA",
+      "randomness": 0.0,
+      "threatSensitivity": 1.0,
+      "aggression": 0.75,
+      "centerControlWeight": 1.0,
+      "useOpeningBook": true,
+      "useKillerHeuristic": true,
+      "useTranspositionTable": true,
+      "useNullMovePruning": true,
+      "useIterativeDeepening": true,
+      "useThreatSpaceAnalysis": true,
+      "useInfluenceGraph": true,
+      "useProbabilisticEval": true,
+      "useNListening": true,
+      "trapDetectionDepth": 6,
+      "strategicPlanning": true
+    }
+  },
+  
+  "evaluation": {
+    "patternScores": {
+      "five": 10000000,
+      "openFour": 500000,
+      "closedFour": 200000,
+      "openThree": 50000,
+      "closedThree": 5000,
+      "openTwo": 500
+    },
+    "opponentPatternMultipliers": {
+      "five": 1.0,
+      "openFour": 1.6,
+      "closedFour": 0.75,
+      "openThree": 0.24,
+      "closedThree": 0.16,
+      "openTwo": 0.1
+    },
+    "comboBonuses": {
+      "doubleOpenThree": 30000,
+      "doubleClosedFour": 80000,
+      "openThreePlusClosedFour": 30000
+    },
+    "masterWeights": {
+      "threatSpace": 0.15,
+      "attackIncentive": 0.30,
+      "influence": 0.15,
+      "probabilistic": 0.10,
+      "strategic": 0.30
+    },
+    "standardWeights": {
+      "pattern": 1.0,
+      "position": 0.3,
+      "connection": 0.2
+    },
+    "compression": {
+      "scale": 50000.0,
+      "maxAuxiliaryScore": 100000
+    },
+    "dynamicWeights": {
+      "opening": {
+        "attack": 1.6,
+        "defense": 0.4
+      },
+      "midgame": {
+        "attack": 1.0,
+        "defense": 1.0
+      },
+      "endgame": {
+        "attack": 0.8,
+        "defense": 1.3
+      },
+      "opponentOpenFour": {
+        "attack": 0.3,
+        "defense": 3.0
+      },
+      "myOpenFour": {
+        "attack": 3.0,
+        "defense": 0.3
+      }
+    }
+  },
+  
+  "search": {
+    "timeManagement": {
+      "masterMode": {
+        "timeBudgets": {
+          "2": 500,
+          "4": 1500,
+          "6": 3000,
+          "8": 5000,
+          "10": 7000,
+          "12": 9000,
+          "14": 11000
+        }
+      },
+      "normalMode": {
+        "timeBudgets": {
+          "2": 500,
+          "4": 2000,
+          "6": 4000,
+          "8": 6000,
+          "10": 8000
+        }
+      },
+      "safetyMultiplier": 1.2,
+      "minRemainingTime": 300
+    },
+    "moveGeneration": {
+      "maxDistanceByPieceCount": {
+        "2": 8,
+        "5": 7,
+        "default": 6
+      },
+      "neighborRange": 2,
+      "dynamicWidth": {
+        "4": 5,
+        "8": 8,
+        "12": 12,
+        "16": 10,
+        "20": 8,
+        "default": 6
+      }
+    },
+    "killerMoves": {
+      "maxPerDepth": 2
+    }
+  },
+  
+  "cache": {
+    "boardCache": {
+      "maxSize": 10000,
+      "scoreCacheRatio": 1.0,
+      "threatCacheRatio": 0.5,
+      "patternCacheRatio": 0.5
+    },
+    "threatCache": {
+      "maxSize": 2000
+    }
+  },
+  
+  "killDetection": {
+    "enabled": true,
+    "maxDepth": 6,
+    "cacheEnabled": true,
+    "triggerConditions": {
+      "minThreatLevel": "OPEN_THREE",
+      "maxPieceCount": 50
+    },
+    "scoreMapping": {
+      "1": 50000000,
+      "2": 10000000,
+      "3": 5000000,
+      "4": 2500000,
+      "5": 1000000
+    }
+  },
+  
+  "beginnerAI": {
+    "memoryCapacity": 5,
+    "attentionRadius": {
+      "0.10": 4,
+      "0.25": 3,
+      "0.40": 2,
+      "default": 1
+    },
+    "threatDifficulty": {
+      "STRAIGHT_FIVE": 0.0,
+      "OPEN_FOUR": 0.25,
+      "CLOSED_FOUR": 0.5,
+      "STRAIGHT_THREE": 0.6,
+      "OPEN_THREE": 0.75,
+      "GAP_THREE": 0.95,
+      "DOUBLE_THREE": 0.85,
+      "DIAGONAL_THREAT": 0.5
+    },
+    "perceptionProbability": 0.7,
+    "diagonalPenalty": 0.4,
+    "distractionProbability": 0.15,
+    "distractionMultiplier": 0.5,
+    "defenseWillingness": {
+      "STRAIGHT_FIVE": 1.0,
+      "OPEN_FOUR": 0.85,
+      "CLOSED_FOUR": 0.5,
+      "default": 0.3
+    },
+    "overconfidencePenalty": 0.3,
+    "overconfidenceProbability": 0.4,
+    "slipProbability": {
+      "fiveDefense": 0.1,
+      "openFourDefense": 0.15
+    },
+    "hesitationProbability": 0.4,
+    "inspirationProbability": 0.15
+  },
+  
+  "openingBook": {
+    "maxPieces": 8,
+    "center": 7,
+    "evaluationWeights": {
+      "center": 15,
+      "connection": 8,
+      "pressure": 5
+    }
+  },
+  
+  "localMCTS": {
+    "maxSimulations": 50,
+    "explorationConstant": 1.414,
+    "localRange": 2,
+    "maxSimulationDepth": 15,
+    "earlyStopMinSimulations": 20,
+    "winRateThresholdHigh": 0.9,
+    "winRateThresholdLow": 0.1,
+    "smartMoveProbability": 0.8,
+    "smartMoveCheckLimit": 5
+  },
+  
+  "masterModeOptimization": {
+    "aggressiveOpening": true,
+    "proactiveAttack": true,
+    "endgameMode": {
+      "advantageThreshold": {
+        "myOpenThreeAdvantage": 1,
+        "threatDensity": 0.6
+      },
+      "timeAllocation": {
+        "endgameExtraRatio": 0.3
+      }
+    }
+  },
+  
+  "threatEvaluation": {
+    "threatValues": {
+      "FIVE": 100,
+      "OPEN_FOUR": 40,
+      "CLOSED_FOUR": 20,
+      "OPEN_THREE": 10,
+      "CLOSED_THREE": 3,
+      "OPEN_TWO": 1,
+      "POTENTIAL": 0
+    },
+    "killComboThreshold": 20,
+    "maxOpenThreeForKillDetection": 4
+  },
+  
+  "debug": {
+    "enableDebugLog": false,
+    "enableBoardLog": false,
+    "enableConfigHotReload": false
+  }
+}

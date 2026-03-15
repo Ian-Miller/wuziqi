@@ -1,0 +1,96 @@
+[versions]
+activityCompose = "1.12.3"
+agp = "9.0.0"
+ksp = "2.3.5"
+hilt = "2.59"
+hiltNavigationCompose = "1.3.0"
+
+kotlin = "2.3.0"
+
+composeBom = "2026.01.01"
+coreKtx = "1.17.0"
+datastorePreferences = "1.2.0"
+espressoCore = "3.7.0"
+hiltAndroid = "2.59"
+hiltCompiler = "2.59"
+junit = "4.13.2"
+junitVersion = "1.3.0"
+kotlinxCoroutinesAndroid = "1.10.2"
+kotlinxSerialization = "1.6.3"
+markdownRenderer = "0.39.2"
+lifecycleRuntimeKtx = "2.10.0"
+lifecycleViewmodelCompose = "2.10.0"
+roomCompiler = "2.8.4"
+roomKtx = "2.8.4"
+roomRuntime = "2.8.4"
+navigationCompose = "2.9.7"
+
+bouncycastle = "1.78.1"
+qrose = "1.1.2"
+okhttp = "5.3.2"
+camerax = "1.4.1"
+mlkitBarcode = "17.3.0"
+javawebsocket = "1.5.7"
+
+[libraries]
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
+
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastorePreferences" }
+androidx-espresso-core = { module = "androidx.test.espresso:espresso-core", version.ref = "espressoCore" }
+androidx-junit = { module = "androidx.test.ext:junit", version.ref = "junitVersion" }
+
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
+
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "roomCompiler" }
+androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "roomKtx" }
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "roomRuntime" }
+
+hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hiltAndroid" }
+hilt-compiler = { module = "com.google.dagger:hilt-compiler", version.ref = "hiltCompiler" }
+hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
+junit = { module = "junit:junit", version.ref = "junit" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutinesAndroid" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+markdown-renderer = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdownRenderer" }
+
+# Nostr 密码学：BouncyCastle（支持 secp256k1 / BIP340 Schnorr / ECDH，纯 Java，Maven Central 可用）
+bouncycastle-core = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+
+# QR 码生成（Compose）
+qrose = { module = "io.github.alexzhirkevich:qrose", version.ref="qrose"}
+
+# OkHttp（项目中可能已有）
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp"}
+
+# CameraX + ML Kit（QR 扫码）
+camerax-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camerax" }
+camerax-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
+camerax-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
+mlkit-barcode = { module = "com.google.mlkit:barcode-scanning", version.ref = "mlkitBarcode" }
+javawebsocket = { module = "org.java-websocket:Java-WebSocket", version.ref = "javawebsocket" }
+
+[bundles]
+androidx-compose = ["androidx-compose-ui", "androidx-compose-ui-graphics" ]
+
+
+[plugins]
+agp = { id = "com.android.application", version.ref="agp" }
+ksp = { id = "com.google.devtools.ksp", version.ref="ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref="hilt" }
+
+kotlin = { id = "org.jetbrains.kotlin.android", version.ref="kotlin" }
+compose-kotlin-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref="kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref="kotlin" }

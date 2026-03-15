@@ -1,0 +1,75 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.properties
+local.properties
+
+# Kotlin
+.kotlin/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 编译输出
+*.class
+*.dex
+*.apk
+*.aab
+
+# 本地配置
+app/release/
+app/debug/
+captures/
+
+# NDK / CMake（C++ 编译）
+.cxx/
+.externalNativeBuild/
+
+# Rust
+rust/target/
+*.rs.bk
+Cargo.lock
+
+# JNI 库（通过 WSL 构建，不提交）
+# 注意：如需提交预编译库，请注释下面这行
+app/src/main/jniLibs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+
+# 安全（签名文件）
+*.jks
+*.keystore
+
+# 项目文档（本地参考，不公开）
+plans/
+web_content/
+deprecated/
+ARCHITECTURE_PROPOSAL.md
+AGENTS.md
+BUG_FIXES.md
+AI_TEST_QUICK_REF.md
+LOGCAT_HELP.md
+MASTER_AI_MIGRATION.md
+MEMORY_BARRIER_GUIDE.md
+RUST_NEOVIM_SETUP.md
+RUST_SETUP.md
+RUST_NEOVIM_SETUP.md
+SHARED_MEMORY_GUIDE.md
+
+# 调试脚本
+debug_ai.ps1
+debug_logs.bat
+debug_logs.sh
+
+# Windows 异常文件
+nul
+
+# 内存转储文件
+*.hprof
