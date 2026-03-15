@@ -1,5 +1,6 @@
 package io.github.ian_miller.wuziqi.ui.remote
 
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -156,28 +157,38 @@ private fun RemoteJoiningContent(
         ActivityResultContracts.GetContent()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        runCatching {
-            val image = InputImage.fromFilePath(context, uri)
-            val scanner = BarcodeScanning.getClient(
-                BarcodeScannerOptions.Builder()
-                    .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                    .build()
-            )
-            scanner.process(image)
-                .addOnSuccessListener { barcodes ->
-                    val code = barcodes.firstOrNull()?.rawValue
-                    if (code != null) {
-                        onJoinCode(code)
-                    } else {
-                        errorMessage = s.qrNotFound
-                    }
-                }
-                .addOnFailureListener {
-                    errorMessage = s.qrScanFailed
-                }
-        }.onFailure {
+
+        // 手动加载位图再转 InputImage，避免 InputImage.fromFilePath()
+        // 在 Android 13+ Photo Picker 返回的 content:// URI 上多次打开流失败
+        val bitmap = try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream)
+            }
+        } catch (_: Exception) { null }
+
+        if (bitmap == null) {
             errorMessage = s.qrScanFailed
+            return@rememberLauncherForActivityResult
         }
+
+        val image = InputImage.fromBitmap(bitmap, 0)
+        val scanner = BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
+        )
+        scanner.process(image)
+            .addOnSuccessListener { barcodes ->
+                val code = barcodes.firstOrNull()?.rawValue
+                if (code != null) {
+                    onJoinCode(code)
+                } else {
+                    errorMessage = s.qrNotFound
+                }
+            }
+            .addOnFailureListener {
+                errorMessage = s.qrScanFailed
+            }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {

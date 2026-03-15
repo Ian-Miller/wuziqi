@@ -97,6 +97,7 @@ class RemoteViewModel @Inject constructor(
     private var lanStoredIp: String = ""
     private var lanStoredPort: Int = LAN_PORT
     private var reconnectJob: Job? = null
+    private var joinTimeoutJob: Job? = null
 
     private val _state = MutableStateFlow(RemoteUiState())
     val state: StateFlow<RemoteUiState> = _state.asStateFlow()
@@ -365,6 +366,7 @@ class RemoteViewModel @Inject constructor(
     }
 
     fun cancelJoining() {
+        joinTimeoutJob?.cancel()
         reconnectJob?.cancel()
         lanBridge?.close()
         lanBridge = null
@@ -413,6 +415,33 @@ class RemoteViewModel @Inject constructor(
         _state.update { it.copy(phase = RemotePhase.Creating(inviteCode, gameId, isLan = true)) }
     }
 
+    /**
+     * 周期性检查 LAN 服务器存活状态（由 UI 层在 Creating 阶段调用）。
+     * 热点关闭再重开时 bridge 可能失效，此方法会重建服务器并在 IP 变化时更新邀请码。
+     */
+    fun ensureLanServerAlive() {
+        val phase = _state.value.phase as? RemotePhase.Creating ?: return
+        if (!phase.isLan) return
+        val ip = getLocalIpAddress() ?: return
+
+        // Bridge 被意外清理或服务器线程终止时重建
+        if (lanBridge == null) {
+            lanBridge = LanGameBridge(
+                onMessage = { msg -> viewModelScope.launch { handleLanMessage(msg) } },
+                onPeerConnected = ::onLanPeerConnected,
+                onDisconnected = ::onLanDisconnected,
+            ).also { it.startServer() }
+        }
+
+        // IP 变化时更新邀请码（热点重启后 IP 可能变化）
+        val newCode = LanInviteCode.encode(phase.gameId, ip)
+        if (newCode != phase.inviteCode) {
+            _state.update {
+                it.copy(phase = RemotePhase.Creating(newCode, phase.gameId, isLan = true))
+            }
+        }
+    }
+
     private fun joinRoomLan(code: String) {
         val decoded = LanInviteCode.decode(code) ?: run {
             _state.update { it.copy(phase = RemotePhase.Error("局域网邀请码格式错误")) }
@@ -431,6 +460,20 @@ class RemoteViewModel @Inject constructor(
             onDisconnected = ::onLanDisconnected,
         ).also { it.connectToHost(ip, port) }
         _state.update { it.copy(phase = RemotePhase.WaitingForOpponent) }
+
+        // 连接超时：若 15 秒内未收到 JOIN_ACK，视为连接失败
+        joinTimeoutJob?.cancel()
+        joinTimeoutJob = viewModelScope.launch {
+            delay(15_000L)
+            if (_state.value.phase is RemotePhase.WaitingForOpponent) {
+                reconnectJob?.cancel()
+                lanBridge?.close()
+                lanBridge = null
+                _state.update {
+                    it.copy(phase = RemotePhase.Error("连接超时，请确认房主已创建房间且双方在同一网络"))
+                }
+            }
+        }
     }
 
     private fun handleLanMessage(msg: GameMsg) {
@@ -453,6 +496,7 @@ class RemoteViewModel @Inject constructor(
             }
             is RemotePhase.WaitingForOpponent -> {
                 if (msg.type == MsgType.JOIN_ACK) {
+                    joinTimeoutJob?.cancel()
                     val gameId = msg.gameId.ifBlank { lanGameId }
                     _state.update {
                         it.copy(
@@ -680,6 +724,7 @@ class RemoteViewModel @Inject constructor(
     // ── 重置 ───────────────────────────────────────────────────────────────────
 
     fun reset() {
+        joinTimeoutJob?.cancel()
         reconnectJob?.cancel()
         lanBridge?.close()
         lanBridge = null
@@ -769,6 +814,7 @@ class RemoteViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        joinTimeoutJob?.cancel()
         reconnectJob?.cancel()
         lanBridge?.close()
         client.disconnect()

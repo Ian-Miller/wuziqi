@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import io.github.alexzhirkevich.qrose.rememberQrCodePainter
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import io.github.ian_miller.wuziqi.ui.theme.LocalStrings
 
@@ -100,8 +101,18 @@ fun RemoteLobbyScreen(
                         onEndGame = { viewModel.resignRemote(); viewModel.reset() },
                     )
 
-                is RemotePhase.Creating ->
+                is RemotePhase.Creating -> {
+                    // LAN 模式：定期检查服务器存活，热点切换后自动重建
+                    if (p.isLan) {
+                        LaunchedEffect(Unit) {
+                            while (true) {
+                                delay(5_000L)
+                                viewModel.ensureLanServerAlive()
+                            }
+                        }
+                    }
                     RemoteCreatingContent(inviteCode = p.inviteCode, isLan = p.isLan)
+                }
 
                 is RemotePhase.Connected ->
                     RemoteConnectedLobbyContent(
