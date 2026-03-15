@@ -39,6 +39,7 @@ const DECISION_HISTORY_CAP: usize = 24;
 /// Killer/History Heuristic 参数
 const MAX_PLY: usize = 64;
 const HISTORY_MAX: i32 = 2_000_000;
+const LOCAL_EVAL_RADIUS: i32 = 3;
 
 /// 叶子静态评估缓存（直接映射）
 const EVAL_CACHE_SIZE: usize = 1 << 16;
@@ -663,6 +664,7 @@ impl GomokuAi {
                 tt,
                 child_hash,
                 1,
+                Some((row, col)),
             );
 
             // 根节点重复局面惩罚（主要改善撤销/重试时“机械复读同一步”）
@@ -821,6 +823,7 @@ impl GomokuAi {
         tt: &mut TranspositionTable,
         hash: u64,
         ply: usize,
+        last_move: Option<(usize, usize)>,
     ) -> i32 {
         // 每个节点都检查 should_stop（Acquire：确保看到其他线程的 Release 写入）
         if !self.should_continue() {
@@ -852,11 +855,11 @@ impl GomokuAi {
         }
 
         if depth <= 0 {
-            let eval_key = self.eval_cache_key(hash, player);
+            let eval_key = self.eval_cache_key(hash, player, last_move);
             let ev = if let Some(cached) = self.eval_cache.get(eval_key) {
                 cached
             } else {
-                let v = self.static_eval(board, player);
+                let v = self.static_eval_local(board, player, last_move);
                 self.eval_cache.set(eval_key, v);
                 v
             };
@@ -928,18 +931,18 @@ impl GomokuAi {
             // PVS（Principal Variation Search）
             // 首着全窗口，后续先零窗口探测，必要时再全窗口重搜
             let mut score = if first_move {
-                -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1)
+                -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1, Some((row, col)))
             } else {
-                let mut s = -self.minimax(board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash, ply + 1);
+                let mut s = -self.minimax(board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash, ply + 1, Some((row, col)));
                 if s > alpha && s < beta {
-                    s = -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1);
+                    s = -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1, Some((row, col)));
                 }
                 s
             };
 
             // 若 LMR 降深后出现潜在改进，再用完整深度复核一次
             if reduce > 0 && score > alpha {
-                score = -self.minimax(board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash, ply + 1);
+                score = -self.minimax(board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash, ply + 1, Some((row, col)));
             }
 
             // 回溯撤销
@@ -992,6 +995,51 @@ impl GomokuAi {
             let (center_w, link_w, mobility_w, line_w) =
                 self.phase_weights(board.move_count, is_master);
 
+            score += self.strategic_eval(board, player, center_w, link_w, mobility_w);
+            score += self.line_pressure_eval(board, player, line_w);
+        }
+
+        score
+    }
+
+    /// 叶子局面局部评估（增量近似）：
+    /// 优先评估“最后落子点”附近窗口，降低 leaf 评估开销。
+    /// 若 last_move 不可用则回退全局静态评估。
+    fn static_eval_local(&self, board: &Board, player: Color, last_move: Option<(usize, usize)>) -> i32 {
+        let Some((lr, lc)) = last_move else {
+            return self.static_eval(board, player);
+        };
+
+        let mut marked = [[false; BOARD_SIZE]; BOARD_SIZE];
+        let mut score = 0i32;
+        let opp = player.opponent();
+
+        // 在最后落子周围半径 R 的窗口内收集空位（四方向影响主要集中于此）
+        for rr in (lr as i32 - LOCAL_EVAL_RADIUS)..=(lr as i32 + LOCAL_EVAL_RADIUS) {
+            for cc in (lc as i32 - LOCAL_EVAL_RADIUS)..=(lc as i32 + LOCAL_EVAL_RADIUS) {
+                if rr < 0 || rr >= BOARD_SIZE as i32 || cc < 0 || cc >= BOARD_SIZE as i32 {
+                    continue;
+                }
+                let r = rr as usize;
+                let c = cc as usize;
+                if board.get(r, c) == Color::Empty && !marked[r][c] {
+                    marked[r][c] = true;
+                    score += evaluate_position(board, r, c, player);
+                    score -= evaluate_position(board, r, c, opp) * 9 / 10;
+                }
+            }
+        }
+
+        // 窗口可能过稀（如开局边缘），给一个安全回退
+        if score == 0 {
+            return self.static_eval(board, player);
+        }
+
+        // 保留原有战略项，避免布局能力退化
+        if self.config.max_depth >= 12 {
+            let is_master = self.config.max_depth >= 20;
+            let (center_w, link_w, mobility_w, line_w) =
+                self.phase_weights(board.move_count, is_master);
             score += self.strategic_eval(board, player, center_w, link_w, mobility_w);
             score += self.line_pressure_eval(board, player, line_w);
         }
@@ -1075,9 +1123,14 @@ impl GomokuAi {
         total
     }
 
-    fn eval_cache_key(&self, hash: u64, player: Color) -> u64 {
+    fn eval_cache_key(&self, hash: u64, player: Color, last_move: Option<(usize, usize)>) -> u64 {
         let turn_bit = if player == Color::Black { 0u64 } else { 1u64 };
-        hash ^ (turn_bit << 63)
+        let lm = if let Some((r, c)) = last_move {
+            ((r as u64) << 4) ^ (c as u64)
+        } else {
+            0xFu64
+        };
+        hash ^ (turn_bit << 63) ^ (lm << 56)
     }
 
     fn player_idx(player: Color) -> usize {
