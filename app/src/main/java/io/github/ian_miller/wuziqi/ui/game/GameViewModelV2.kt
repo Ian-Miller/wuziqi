@@ -1285,8 +1285,8 @@ class GameViewModelV2 @Inject constructor(
         rustAi?.let { return it }
         return when (difficulty) {
             // EASY / MEDIUM → Guided MCTS（探索常数 × 100 传给 JNI）
-            Difficulty.EASY   -> RustAi.createMcts(timeLimitMs = 500,   player = aiColorInt, explorationCx100 = 200)
-            Difficulty.MEDIUM -> RustAi.createMcts(timeLimitMs = 1500,  player = aiColorInt, explorationCx100 = 120)
+            Difficulty.EASY   -> RustAi.createMcts(timeLimitMs = 650,   player = aiColorInt, explorationCx100 = 220)
+            Difficulty.MEDIUM -> RustAi.createMcts(timeLimitMs = 1800,  player = aiColorInt, explorationCx100 = 110)
             // HARD / MASTER → Minimax + Alpha-Beta + 迭代加深
             Difficulty.HARD   -> RustAi.create(maxDepth = 12, timeLimitMs = 4000,  player = aiColorInt)
             Difficulty.MASTER -> RustAi.create(maxDepth = 20, timeLimitMs = 12000, player = aiColorInt)
