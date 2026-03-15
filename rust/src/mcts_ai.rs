@@ -257,14 +257,15 @@ impl MctsAi {
         let mut iter_count: u32 = 0;
 
         loop {
-            // 时间 + 停止检查（每 TIME_CHECK_INTERVAL 次迭代检查一次）
-            if iter_count % TIME_CHECK_INTERVAL == 0 {
-                if self.should_stop.load(Ordering::Acquire) {
-                    break;
-                }
-                if self.elapsed_ms() >= self.config.time_limit_ms {
-                    break;
-                }
+            // 协作取消：每次迭代都检查 should_stop（保证快速响应）
+            if self.should_stop.load(Ordering::Acquire) {
+                break;
+            }
+            // 时间检查：按间隔检查，避免频繁调用系统时间
+            if iter_count % TIME_CHECK_INTERVAL == 0
+                && self.elapsed_ms() >= self.config.time_limit_ms
+            {
+                break;
             }
             iter_count += 1;
 
@@ -321,6 +322,10 @@ impl MctsAi {
     // =========================================================================
 
     fn run_one_iteration(&self, root: &mut MctsNode, board: &mut Board, root_mover: Color) {
+        if self.should_stop.load(Ordering::Acquire) {
+            return;
+        }
+
         // ── Selection ────────────────────────────────────────────────────────
         // 沿 UCB1 最优路径下行，直到找到未完全扩展的节点或叶节点
         let node_ptr = root as *mut MctsNode;
@@ -355,7 +360,7 @@ impl MctsAi {
             let next_mover = child_color.opponent();
             let max_c = self.config.max_children;
             let child_untried = top_k_moves(board, next_mover, max_c);
-            board.unplace(mv.0, mv.1);
+            debug_assert!(board.unplace(mv.0, mv.1));
 
             let child = MctsNode {
                 mv: Some(mv),
@@ -394,6 +399,10 @@ impl MctsAi {
         let mut path: Vec<usize> = Vec::new();
 
         loop {
+            if self.should_stop.load(Ordering::Acquire) {
+                return (node, current_mover, path);
+            }
+
             let n = &mut *node;
 
             // 未完全扩展 → 在此处扩展
@@ -419,7 +428,9 @@ impl MctsAi {
             // 在 board 上落子，推进局面
             let child = &n.children[best_idx];
             if let Some((r, c_pos)) = child.mv {
-                board.place(r, c_pos, current_mover);
+                if !board.place(r, c_pos, current_mover) {
+                    return (node, current_mover, path);
+                }
             }
             current_mover = current_mover.opponent();
             path.push(best_idx);
@@ -483,7 +494,7 @@ impl MctsAi {
         for &(r, c) in moves {
             if b.place(r, c, self.config.player) {
                 let win = b.check_win(r, c, self.config.player);
-                b.unplace(r, c);
+                debug_assert!(b.unplace(r, c));
                 if win {
                     return Some((r, c));
                 }
@@ -498,7 +509,7 @@ impl MctsAi {
         for &(r, c) in moves {
             if b.place(r, c, opp) {
                 let win = b.check_win(r, c, opp);
-                b.unplace(r, c);
+                debug_assert!(b.unplace(r, c));
                 if win {
                     return Some((r, c));
                 }
@@ -735,14 +746,14 @@ impl MctsAi {
         for (r, c) in next_moves {
             if b.place(r, c, opp) {
                 let win = b.check_win(r, c, opp);
-                b.unplace(r, c);
+                debug_assert!(b.unplace(r, c));
                 if win {
-                    b.unplace(mv.0, mv.1);
+                    debug_assert!(b.unplace(mv.0, mv.1));
                     return true;
                 }
             }
         }
-        b.unplace(mv.0, mv.1);
+        debug_assert!(b.unplace(mv.0, mv.1));
         false
     }
 }

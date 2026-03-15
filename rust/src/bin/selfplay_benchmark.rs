@@ -11,6 +11,7 @@ use ai_engine::{AiConfig, GomokuAi};
 use board::{Board, Color};
 use mcts_ai::{MctsAi, MctsConfig, MAX_CHILDREN_EASY, MAX_CHILDREN_MEDIUM};
 use std::env;
+use std::io::{self, Write};
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]
@@ -186,6 +187,12 @@ fn main() {
     let mut a_stats = SideStats::default();
     let mut b_stats = SideStats::default();
 
+    println!("=== Gomoku Selfplay Benchmark (running) ===");
+    println!("A = {:?}, B = {:?}, games = {}", level_a, level_b, games);
+    let _ = io::stdout().flush();
+
+    let progress_step = if games <= 20 { 1 } else { (games / 20).max(1) };
+
     for g in 0..games {
         let a_is_black = g % 2 == 0;
         let opening_id = g;
@@ -224,6 +231,17 @@ fn main() {
                 a_stats.draws += 1;
                 b_stats.draws += 1;
             }
+        }
+
+        let done = g + 1;
+        if done % progress_step == 0 || done == games {
+            println!(
+                "progress: {}/{} ({:.0}%)",
+                done,
+                games,
+                (done as f64) * 100.0 / (games as f64)
+            );
+            let _ = io::stdout().flush();
         }
     }
 
