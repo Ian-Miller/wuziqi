@@ -38,6 +38,11 @@ pub const MAX_CHILDREN_MEDIUM: usize = 12;
 const TIME_CHECK_INTERVAL: u32 = 64;
 const PROGRESS_HEARTBEAT_INTERVAL: u32 = 32;
 
+/// EASY 模式：对斜方向威胁的特殊忽视概率
+/// 初学者特别容易忽略 45°/135° 方向的连珠，视觉上比横竖更难追踪
+const EASY_DIAGONAL_MISS_ATTACK: f64 = 0.55;  // 自己斜方向的赢棋有约一半概率看漏
+const EASY_DIAGONAL_MISS_DEFENSE: f64 = 0.72; // 对方斜方向的威胁防守更差（约七成看漏）
+
 /// 进度回调节流参数（避免 JNI 高频调用影响算力）
 const PROGRESS_REPORT_INTERVAL_MS: u64 = 100;
 const PROGRESS_MIN_DELTA_PERCENT: i32 = 1;
@@ -271,31 +276,61 @@ impl MctsAi {
         }
 
         // 3. 深度 1：己方五连 / 对方五连（必须立即响应）
+        // EASY 模式：若赢棋/堵棋方向是斜向，有较大概率直接看漏
         if let Some(m) = self.find_immediate_win(board, &candidates) {
-            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
-            return Some(m);
-        }
-        // 对方五连：扫全部候选，避免五连点未进 Top-K
-        if let Some(m) = self.find_must_block(board, &all_moves) {
-            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
-            return Some(m);
-        }
-
-        // 4. 深度 2：活四级威胁（确定性处理，不交给 MCTS）
-        // EASY 模式下，新手有一定概率看不到这些深层威胁（概率随棋盘密度增加而上升）
-        let skip_deep_threats = self.easy_mode && self.roll(self.attention_miss_prob(board));
-        // 己方可形成活四/双四/三四 → 几乎必胜，直接走
-        if !skip_deep_threats {
-            if let Some(m) = self.find_forced_win(board, &all_moves) {
+            let diag_miss = self.easy_mode
+                && is_diagonal_threat(board, m.0, m.1, self.config.player)
+                && self.roll(EASY_DIAGONAL_MISS_ATTACK);
+            if !diag_miss {
                 self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
                 return Some(m);
             }
         }
-        // 对方可形成活四/双四/三四 → 必须堵，否则对方下一步必胜
-        if !skip_deep_threats {
-            if let Some(m) = self.find_critical_block(board, &all_moves) {
+        // 对方五连：扫全部候选，避免五连点未进 Top-K
+        // EASY 模式：斜方向的对手五连有更高概率被忽视（防守比进攻更差）
+        if let Some(m) = self.find_must_block(board, &all_moves) {
+            let diag_miss = self.easy_mode
+                && is_diagonal_threat(board, m.0, m.1, self.config.player.opponent())
+                && self.roll(EASY_DIAGONAL_MISS_DEFENSE);
+            if !diag_miss {
                 self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
                 return Some(m);
+            }
+        }
+
+        // 4. 深度 2：活四级威胁（确定性处理，不交给 MCTS）
+        // EASY 模式下，新手对进攻和防守的注意力不同：
+        //   - 自己的强制赢棋：基础 15% 概率看漏，斜方向再叠加更高概率
+        //   - 对方的关键威胁：基础 32% 概率看漏，斜方向看漏还要更多
+        // 两者的概率随棋盘密度进一步上升（注意力分散）
+        let attention = self.attention_miss_prob(board);
+        let skip_own_forced = self.easy_mode && self.roll(0.15 + attention * 0.30);
+        let skip_opponent_block = self.easy_mode && self.roll(0.32 + attention * 0.50);
+
+        // 己方可形成活四/双四/三四 → 几乎必胜，直接走
+        // EASY：斜方向的强制赢棋有额外概率被忽视
+        if !skip_own_forced {
+            if let Some(m) = self.find_forced_win(board, &all_moves) {
+                let diag_miss = self.easy_mode
+                    && is_diagonal_threat(board, m.0, m.1, self.config.player)
+                    && self.roll(EASY_DIAGONAL_MISS_ATTACK + 0.10);
+                if !diag_miss {
+                    self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                    return Some(m);
+                }
+            }
+        }
+        // 对方可形成活四/双四/三四 → 必须堵，否则对方下一步必胜
+        // EASY：斜方向的关键威胁是新手最难察觉的，看漏概率最高
+        if !skip_opponent_block {
+            if let Some(m) = self.find_critical_block(board, &all_moves) {
+                let diag_miss = self.easy_mode
+                    && is_diagonal_threat(board, m.0, m.1, self.config.player.opponent())
+                    && self.roll(EASY_DIAGONAL_MISS_DEFENSE + 0.10);
+                if !diag_miss {
+                    self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                    return Some(m);
+                }
             }
         }
 
@@ -313,8 +348,12 @@ impl MctsAi {
     pub fn new(config: MctsConfig) -> Self {
         let is_easy = config.exploration_c >= 1.8 || config.max_children >= MAX_CHILDREN_EASY;
         let (mistake_prob, narrow_vision_prob, sample_temperature, sample_top_n) = if is_easy {
-            // EASY：新手模拟——会犯明显错误、视野窄窄、抽样随机
-            (0.18, 0.22, 1.2, 4)
+            // EASY：新手模拟——犯错频繁、视野窄、抽样随机性高
+            // mistake_prob=0.30：每三手就有一手主动走次优位置
+            // narrow_vision_prob=0.38：接近四成概率只盯眼前几格
+            // sample_temperature=1.8：高温让候选分布更平坦，增加随机感
+            // sample_top_n=5：从前5候选中随机选，而非只看top1
+            (0.30, 0.38, 1.8, 5)
         } else {
             // MEDIUM：业余爱好者——偶尔小失误，但不会太离谱
             (0.04, 0.06, 0.55, 2)
@@ -710,19 +749,19 @@ impl MctsAi {
     // =========================================================================
 
     /// 注意力丢失概率：随棋盘密度增加，新手注意力下降。
-    /// 早局（<12 子）：几乎不遗漏（0%）
-    /// 中盘（12-40 子）：逐渐上升（5%-25%）
-    /// 后期（>40 子）：高概率遗漏（25%-40%）
+    /// 早局（<6 子）：专注，几乎不遗漏（0%）
+    /// 初中盘（6-30 子）：逐渐分心（10%-40%）
+    /// 后期（>30 子）：注意力明显散漫（40%-55%）
     fn attention_miss_prob(&self, board: &Board) -> f64 {
         let pieces = board.move_count;
-        if pieces < 12 {
+        if pieces < 6 {
             0.0
-        } else if pieces < 40 {
-            // 12→0.05, 40→0.25 线性插值
-            0.05 + (pieces as f64 - 12.0) / 28.0 * 0.20
+        } else if pieces < 30 {
+            // 6→0.10, 30→0.40 线性插值
+            0.10 + (pieces as f64 - 6.0) / 24.0 * 0.30
         } else {
-            // 40→0.25, 80→0.40
-            (0.25 + (pieces as f64 - 40.0) / 40.0 * 0.15).min(0.40)
+            // 30→0.40, 70→0.55
+            (0.40 + (pieces as f64 - 30.0) / 40.0 * 0.15).min(0.55)
         }
     }
 
@@ -778,7 +817,7 @@ impl MctsAi {
                         (5, 5), (9, 9), (5, 9), (9, 5),
                         (6, 9), (9, 6), (8, 5), (5, 8),
                     ];
-                    if self.roll(0.35) {
+                    if self.roll(0.50) {
                         if let Some(m) = self.pick_from_available(board, &novice) {
                             return Some(m);
                         }
@@ -802,7 +841,7 @@ impl MctsAi {
                         (9, 6), (9, 8), (6, 9), (8, 9),
                         (4, 7), (10, 7), (7, 4), (7, 10),
                     ];
-                    if self.roll(0.40) {
+                    if self.roll(0.55) {
                         if let Some(m) = self.pick_from_available(board, &novice_wide) {
                             return Some(m);
                         }
@@ -908,6 +947,39 @@ impl MctsAi {
 // ============================================================================
 // 模块级辅助函数
 // ============================================================================
+
+/// EASY 模式斜方向盲区检测：在 (row, col) 落子（color）后，
+/// 检查是否在 45°（↗）或 135°（↘）方向形成 ≥4 枚连续同色棋子。
+/// 初学者在视觉上最难追踪斜向连珠，本函数用于判断某个威胁是否属于斜方向，
+/// 若是，则在 EASY 模式下以较高概率跳过（模拟看漏行为）。
+fn is_diagonal_threat(board: &Board, row: usize, col: usize, color: Color) -> bool {
+    let diag_dirs = [(1i32, 1i32), (1i32, -1i32)]; // 45° 和 135° 两个斜方向
+    for &(dr, dc) in &diag_dirs {
+        let mut count = 1i32; // 落子点本身
+        // 正向延伸
+        let (mut r, mut c) = (row as i32 + dr, col as i32 + dc);
+        while r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32
+            && board.get(r as usize, c as usize) == color
+        {
+            count += 1;
+            r += dr;
+            c += dc;
+        }
+        // 反向延伸
+        let (mut r, mut c) = (row as i32 - dr, col as i32 - dc);
+        while r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32
+            && board.get(r as usize, c as usize) == color
+        {
+            count += 1;
+            r -= dr;
+            c -= dc;
+        }
+        if count >= 4 {
+            return true;
+        }
+    }
+    false
+}
 
 /// 严格四连威胁检测：在 (row, col) 落子（颜色 color）后，
 /// 检查是否形成「真实四连」—— 从落子点出发，四个方向中任意一个方向
