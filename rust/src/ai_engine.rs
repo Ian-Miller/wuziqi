@@ -40,6 +40,10 @@ const DECISION_HISTORY_CAP: usize = 24;
 const MAX_PLY: usize = 64;
 const HISTORY_MAX: i32 = 2_000_000;
 
+/// 叶子静态评估缓存（直接映射）
+const EVAL_CACHE_SIZE: usize = 1 << 16;
+const EVAL_CACHE_MASK: usize = EVAL_CACHE_SIZE - 1;
+
 // ============================================================================
 // 置换表（Transposition Table）
 // ============================================================================
@@ -105,6 +109,47 @@ impl TranspositionTable {
             }
         }
         self.entries[idx] = Some(TtEntry { key, depth, score, best_move, flag });
+    }
+}
+
+// ============================================================================
+// 叶子评估缓存（Leaf Eval Cache）
+// ============================================================================
+
+#[derive(Clone, Copy)]
+struct EvalCacheEntry {
+    key: u64,
+    score: i32,
+}
+
+struct EvalCache {
+    entries: Vec<Option<EvalCacheEntry>>,
+}
+
+impl EvalCache {
+    fn new() -> Self {
+        Self {
+            entries: vec![None; EVAL_CACHE_SIZE],
+        }
+    }
+
+    fn clear(&mut self) {
+        for e in &mut self.entries {
+            *e = None;
+        }
+    }
+
+    fn get(&self, key: u64) -> Option<i32> {
+        let idx = (key as usize) & EVAL_CACHE_MASK;
+        self.entries[idx]
+            .as_ref()
+            .filter(|e| e.key == key)
+            .map(|e| e.score)
+    }
+
+    fn set(&mut self, key: u64, score: i32) {
+        let idx = (key as usize) & EVAL_CACHE_MASK;
+        self.entries[idx] = Some(EvalCacheEntry { key, score });
     }
 }
 
@@ -199,6 +244,8 @@ pub struct GomokuAi {
     killer_moves: Vec<[Option<(usize, usize)>; 2]>,
     /// History Heuristic 分数表 [color_idx][move_idx]
     history_scores: [[i32; BOARD_SIZE * BOARD_SIZE]; 2],
+    /// 叶子评估缓存（仅用于 depth<=0 的 static eval）
+    eval_cache: EvalCache,
     /// Zobrist 哈希表（固定不变，在构造时初始化）
     zobrist: ZobristTable,
 }
@@ -216,6 +263,7 @@ impl GomokuAi {
             recent_decisions: VecDeque::with_capacity(DECISION_HISTORY_CAP),
             killer_moves: vec![[None, None]; MAX_PLY],
             history_scores: [[0; BOARD_SIZE * BOARD_SIZE]; 2],
+            eval_cache: EvalCache::new(),
             zobrist: ZobristTable::new(),
         }
     }
@@ -782,7 +830,14 @@ impl GomokuAi {
         }
 
         if depth <= 0 {
-            let ev = self.static_eval(board, player);
+            let eval_key = self.eval_cache_key(hash, player);
+            let ev = if let Some(cached) = self.eval_cache.get(eval_key) {
+                cached
+            } else {
+                let v = self.static_eval(board, player);
+                self.eval_cache.set(eval_key, v);
+                v
+            };
             tt.set(hash, 0, ev, None, TtFlag::Exact);
             return ev;
         }
@@ -894,13 +949,15 @@ impl GomokuAi {
     /// 静态局面评估
     fn static_eval(&self, board: &Board, player: Color) -> i32 {
         let mut score = 0;
-        for r in 0..BOARD_SIZE {
-            for c in 0..BOARD_SIZE {
-                if board.get(r, c) == Color::Empty {
-                    score += evaluate_position(board, r, c, player);
-                    score -= evaluate_position(board, r, c, player.opponent()) * 9 / 10;
-                }
-            }
+
+        // 基础评估只扫描候选区域（而非全盘 225 空位），显著降低叶子评估成本
+        let candidates = board.generate_moves();
+        if candidates.is_empty() {
+            return 0;
+        }
+        for (r, c) in candidates {
+            score += evaluate_position(board, r, c, player);
+            score -= evaluate_position(board, r, c, player.opponent()) * 9 / 10;
         }
 
         // HARD / MASTER 增加全局战略评估（分阶段权重）：
@@ -991,6 +1048,11 @@ impl GomokuAi {
         }
 
         total
+    }
+
+    fn eval_cache_key(&self, hash: u64, player: Color) -> u64 {
+        let turn_bit = if player == Color::Black { 0u64 } else { 1u64 };
+        hash ^ (turn_bit << 63)
     }
 
     fn player_idx(player: Color) -> usize {
@@ -1154,6 +1216,7 @@ impl GomokuAi {
         self.node_count.store(0, Ordering::Relaxed);
         self.start_time = Instant::now();
         self.decay_history();
+        self.eval_cache.clear();
         // 注意：不重置 last_completed_depth / last_depth_time_ms
         // 这两个字段是跨回合历史，只有创建新 AI 对象时才清零
     }
