@@ -11,7 +11,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::board::{Board, Color, BOARD_SIZE};
 use crate::evaluator::{evaluate_position, analyze_line, match_pattern_score, SCORE_FOUR, SCORE_THREE, SCORE_BLOCKED_FOUR};
@@ -153,14 +153,43 @@ pub struct MctsAi {
     config: MctsConfig,
     should_stop: Arc<AtomicBool>,
     start_time: Instant,
+    /// 轻度失误概率（EASY > MEDIUM）
+    mistake_prob: f64,
+    /// 视野收窄概率（模拟新手“只看局部”）
+    narrow_vision_prob: f64,
+    /// 走法抽样温度（越大越随机）
+    sample_temperature: f64,
+    /// 从前 N 个候选中进行抽样
+    sample_top_n: usize,
+    /// 伪随机状态（xorshift64）
+    rng_state: u64,
 }
 
 impl MctsAi {
     pub fn new(config: MctsConfig) -> Self {
+        let is_easy = config.exploration_c >= 1.8 || config.max_children >= MAX_CHILDREN_EASY;
+        let (mistake_prob, narrow_vision_prob, sample_temperature, sample_top_n) = if is_easy {
+            // EASY：更像新手，允许更多“看走眼”和随机性
+            (0.18, 0.22, 1.25, 4)
+        } else {
+            // MEDIUM：爱好者，偶发失误但整体稳健
+            (0.06, 0.08, 0.70, 3)
+        };
+
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15);
+
         Self {
             config,
             should_stop: Arc::new(AtomicBool::new(false)),
             start_time: Instant::now(),
+            mistake_prob,
+            narrow_vision_prob,
+            sample_temperature,
+            sample_top_n,
+            rng_state: seed ^ 0xA076_1D64_78BD_642F,
         }
     }
 
@@ -184,7 +213,11 @@ impl MctsAi {
         if all_moves.is_empty() {
             return None;
         }
-        let candidates = top_k_moves(board, self.config.player, self.config.max_children);
+        let mut candidates = top_k_moves(board, self.config.player, self.config.max_children);
+        if self.roll(self.narrow_vision_prob) && candidates.len() > 6 {
+            // 视野收窄：仅保留局部前列候选（模拟新手只看“眼前几手”）
+            candidates.truncate(6);
+        }
         if candidates.is_empty() {
             return None;
         }
@@ -216,7 +249,7 @@ impl MctsAi {
     // MCTS 主搜索
     // =========================================================================
 
-    fn mcts_search(&self, board: &Board) -> Option<(usize, usize)> {
+    fn mcts_search(&mut self, board: &Board) -> Option<(usize, usize)> {
         let mover = self.config.player;
         let mut root = MctsNode::root(board, mover, self.config.max_children);
         let mut iter_count: u32 = 0;
@@ -238,11 +271,47 @@ impl MctsAi {
             self.run_one_iteration(&mut root, &mut board_clone, mover);
         }
 
-        // 选择访问次数最多的子节点（最稳定的估计）
-        root.children
+        // 正常情况：访问次数最多
+        let mut ranked: Vec<((usize, usize), u32)> = root
+            .children
             .iter()
-            .max_by_key(|c| c.visits)
-            .and_then(|c| c.mv)
+            .filter_map(|c| c.mv.map(|mv| (mv, c.visits)))
+            .collect();
+        ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+        if ranked.is_empty() {
+            return None;
+        }
+
+        // MEDIUM/EASY 人类化：在前 N 候选中按温度抽样（不是永远第一）
+        let top_n = self.sample_top_n.min(ranked.len());
+        let chosen = self.sample_softmax(&ranked[..top_n], self.sample_temperature)
+            .unwrap_or(ranked[0].0);
+
+        // 失误模式：偶发放弃最佳走法（但尽量不犯“立即送杀”）
+        let maybe_mistake = if self.roll(self.mistake_prob) && ranked.len() >= 2 {
+            let alt_pool = ranked.iter().skip(1).take(4).copied().collect::<Vec<_>>();
+            if let Some(alt) = self.sample_softmax(&alt_pool, self.sample_temperature + 0.45) {
+                alt
+            } else {
+                chosen
+            }
+        } else {
+            chosen
+        };
+
+        // 战术底线：避免落子后被对手“一步五连”秒杀
+        if self.allows_opponent_immediate_win(board, maybe_mistake, mover) {
+            for (mv, _) in ranked {
+                if !self.allows_opponent_immediate_win(board, mv, mover) {
+                    return Some(mv);
+                }
+            }
+            // 若所有候选都无法避免，回退当前选择
+            return Some(maybe_mistake);
+        }
+
+        Some(maybe_mistake)
     }
 
     // =========================================================================
@@ -506,6 +575,79 @@ impl MctsAi {
 
     fn elapsed_ms(&self) -> u64 {
         self.start_time.elapsed().as_millis() as u64
+    }
+
+    fn rand_u64(&mut self) -> u64 {
+        // xorshift64*
+        let mut x = self.rng_state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng_state = x;
+        x
+    }
+
+    fn rand_f64(&mut self) -> f64 {
+        let v = self.rand_u64() >> 11;
+        (v as f64) / ((1u64 << 53) as f64)
+    }
+
+    fn roll(&mut self, p: f64) -> bool {
+        if p <= 0.0 {
+            return false;
+        }
+        if p >= 1.0 {
+            return true;
+        }
+        self.rand_f64() < p
+    }
+
+    /// 对访问次数做 softmax 抽样（温度越高越随机）
+    fn sample_softmax(&mut self, items: &[((usize, usize), u32)], temp: f64) -> Option<(usize, usize)> {
+        if items.is_empty() {
+            return None;
+        }
+        if items.len() == 1 {
+            return Some(items[0].0);
+        }
+
+        let t = temp.max(0.05);
+        let max_v = items.iter().map(|(_, v)| *v as f64).fold(f64::MIN, f64::max);
+        let mut weights = Vec::with_capacity(items.len());
+        let mut sum = 0.0;
+
+        for (_, v) in items {
+            let w = ((*v as f64 - max_v) / t).exp();
+            weights.push(w);
+            sum += w;
+        }
+
+        if sum <= f64::EPSILON {
+            return Some(items[0].0);
+        }
+
+        let mut r = self.rand_f64() * sum;
+        for (idx, w) in weights.iter().enumerate() {
+            r -= *w;
+            if r <= 0.0 {
+                return Some(items[idx].0);
+            }
+        }
+        Some(items[items.len() - 1].0)
+    }
+
+    /// 判断某步是否会让对手下一手立即五连
+    fn allows_opponent_immediate_win(&self, board: &Board, mv: (usize, usize), mover: Color) -> bool {
+        let mut b = board.clone();
+        if !b.place(mv.0, mv.1, mover) {
+            return true;
+        }
+        let opp = mover.opponent();
+        let next_moves = b.generate_moves();
+        next_moves.into_iter().any(|(r, c)| {
+            let mut t = b.clone();
+            t.place(r, c, opp) && t.check_win(r, c, opp)
+        })
     }
 }
 
