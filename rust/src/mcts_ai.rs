@@ -131,10 +131,11 @@ impl MctsNode {
         if self.visits == 0 {
             return f64::INFINITY;
         }
-        // value 是从 self.color 角度的，但父节点需要对手角度
-        // → 用 -avg_value 表示对父节点的"价值"
+        // 本实现中 total_value 统一使用“AI（根）视角”累计，
+        // 因此在 UCB 利用项中应直接使用 avg，不能取反。
+        // 之前错误取反会导致树策略偏向低价值分支，表现为“离谱乱下”。
         let avg = self.total_value / self.visits as f64;
-        let exploit = -avg; // 父节点视角
+        let exploit = avg;
         let explore = c * ((parent_visits as f64).ln() / self.visits as f64).sqrt();
         exploit + explore
     }
