@@ -16,16 +16,29 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.core.content.FileProvider
 import java.io.File
 
-/** 将 Compose Painter（如 qrose QrCodePainter）渲染为 Bitmap */
+/**
+ * 将 Compose Painter（如 qrose QrCodePainter）渲染为 Bitmap。
+ *
+ * 渲染尺寸 = sizePx，QR 码占中心 80%，四周各留 10% 白边（静区保障）。
+ * QR 码规范要求至少 4 模块静区；额外白边可确保 ML Kit 识别图片时不会因静区不足而失败。
+ */
 fun painterToBitmap(painter: Painter, density: Density, sizePx: Int = 512): Bitmap {
     val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
     val androidCanvas = android.graphics.Canvas(bitmap)
     androidCanvas.drawColor(android.graphics.Color.WHITE)
+
+    // QR 画在中心 80% 区域，每边留 10% 白边作为静区
+    val padPx = (sizePx * 0.10f).toInt()
+    val qrSizePx = sizePx - 2 * padPx
+
+    androidCanvas.save()
+    androidCanvas.translate(padPx.toFloat(), padPx.toFloat())
     val composeCanvas = Canvas(androidCanvas)
     val drawScope = CanvasDrawScope()
-    drawScope.draw(density, LayoutDirection.Ltr, composeCanvas, Size(sizePx.toFloat(), sizePx.toFloat())) {
-        with(painter) { draw(Size(sizePx.toFloat(), sizePx.toFloat())) }
+    drawScope.draw(density, LayoutDirection.Ltr, composeCanvas, Size(qrSizePx.toFloat(), qrSizePx.toFloat())) {
+        with(painter) { draw(Size(qrSizePx.toFloat(), qrSizePx.toFloat())) }
     }
+    androidCanvas.restore()
     return bitmap
 }
 

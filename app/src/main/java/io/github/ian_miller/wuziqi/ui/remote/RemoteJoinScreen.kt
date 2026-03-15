@@ -346,10 +346,11 @@ internal fun resolveErrorMessage(error: RemotePhase.Error, s: AppStrings): Strin
 /**
  * 在 IO 线程加载位图，用 ML Kit 解码 QR。
  *
- * 比直接在主线程调用更可靠：
+ * 改进：
  * - 强制 ARGB_8888 配置，避免 hardware bitmap 导致 ML Kit 无法读取像素
  * - 对超大图片做 inSampleSize 降采样，降低内存压力
- * - 返回详细的失败信息帮助用户排查
+ * - 自动在四周添加白色边框（保证静区充足），修复因无边框导致的识别失败
+ * - 逐一尝试 0/90/180/270 度旋转，兼容被其他 App 转存后方向变化的图片
  *
  * @return Pair(qrContent, errorMessage)；成功时 first 非空，失败时 second 非空
  */
@@ -376,7 +377,7 @@ private suspend fun decodeQrFromGallery(
     while (maxDim / sampleSize > 1920) sampleSize *= 2
 
     // ── 3. 加载位图（IO 线程，ARGB_8888 强制软件位图）──────────────────────
-    val bitmap: Bitmap = withContext(Dispatchers.IO) {
+    val rawBitmap: Bitmap = withContext(Dispatchers.IO) {
         val opts = BitmapFactory.Options().apply {
             inPreferredConfig = Bitmap.Config.ARGB_8888
             inSampleSize = sampleSize
@@ -388,23 +389,44 @@ private suspend fun decodeQrFromGallery(
         } catch (_: Exception) { null }
     } ?: return Pair(null, s.qrImageLoadFailed)
 
-    // ── 4. ML Kit 扫描 ──────────────────────────────────────────────────────
-    val image = InputImage.fromBitmap(bitmap, 0)
+    // ── 4. 添加白色边框（保证 QR 静区，修复旧版本无边框图片的识别失败）────
+    //    边框宽度 = 图宽的 10%，最低 20px
+    val padPx = (rawBitmap.width * 0.10f).toInt().coerceAtLeast(20)
+    val paddedBitmap: Bitmap = withContext(Dispatchers.Default) {
+        val b = Bitmap.createBitmap(
+            rawBitmap.width + padPx * 2,
+            rawBitmap.height + padPx * 2,
+            Bitmap.Config.ARGB_8888,
+        )
+        android.graphics.Canvas(b).apply {
+            drawColor(android.graphics.Color.WHITE)
+            drawBitmap(rawBitmap, padPx.toFloat(), padPx.toFloat(), null)
+        }
+        rawBitmap.recycle()
+        b
+    }
+
+    // ── 5. ML Kit 扫描，逐一尝试 4 个旋转角度（兼容转存后方向变化）─────────
     val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
             .build()
     )
-    val code = suspendCancellableCoroutine { cont ->
-        scanner.process(image)
-            .addOnSuccessListener { barcodes -> cont.resume(barcodes.firstOrNull()?.rawValue) }
-            .addOnFailureListener { cont.resume(null) }
+    for (rotation in intArrayOf(0, 90, 180, 270)) {
+        val image = InputImage.fromBitmap(paddedBitmap, rotation)
+        val code = suspendCancellableCoroutine { cont ->
+            scanner.process(image)
+                .addOnSuccessListener { barcodes -> cont.resume(barcodes.firstOrNull()?.rawValue) }
+                .addOnFailureListener { cont.resume(null) }
+        }
+        if (code != null) {
+            paddedBitmap.recycle()
+            return Pair(code, null)
+        }
     }
-    bitmap.recycle()
+    paddedBitmap.recycle()
 
-    if (code != null) return Pair(code, null)
-
-    // ── 5. 未检测到：给出详细提示 ───────────────────────────────────────────
+    // ── 6. 未检测到：给出详细提示 ───────────────────────────────────────────
     return Pair(
         null,
         "${s.qrNotFound}\n${s.qrNotFoundDetail}\n(${rawW}×${rawH})",
