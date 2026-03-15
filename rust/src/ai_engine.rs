@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::board::{Board, Color, BOARD_SIZE};
-use crate::evaluator::evaluate_position;
+use crate::evaluator::{evaluate_position, SCORE_BLOCKED_FOUR};
 
 /// 胜利分数（五连或搜索路径内的强制赢棋）
 const WIN_SCORE: i32 = 1_000_000;
@@ -23,15 +23,6 @@ const FAST_JUMP_RATIO: u64 = 8;
 /// 智能加深：预估下一层可接受的最低时间倍数
 /// 剩余时间 >= 上一层耗时 * AFFORD_RATIO 才认为值得继续
 const AFFORD_RATIO: u64 = 3;
-
-/// 战略评估（全局）在 HARD/MASTER 的权重参数
-const HARD_CENTER_W: i32 = 10;
-const HARD_LINK_W: i32 = 8;
-const HARD_MOBILITY_W: i32 = 3;
-
-const MASTER_CENTER_W: i32 = 22;
-const MASTER_LINK_W: i32 = 14;
-const MASTER_MOBILITY_W: i32 = 6;
 
 // ============================================================================
 // 置换表（Transposition Table）
@@ -624,7 +615,8 @@ impl GomokuAi {
 
         let mut best_move = moves.first().map(|&((r, c), _)| (r, c));
 
-        for ((row, col), _) in &moves {
+        let mut first_move = true;
+        for (idx, ((row, col), move_hint_score)) in moves.iter().enumerate() {
             let (row, col) = (*row, *col);
             if !self.should_continue() {
                 return alpha;
@@ -642,7 +634,30 @@ impl GomokuAi {
             }
 
             let child_hash = self.zobrist.hash_move(hash, row, col, player);
-            let score = -self.minimax(&new_board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash);
+            // LMR（Late Move Reduction）：后序且“安静”的走法先浅搜
+            // 以 move_hint_score 区分是否高威胁（>= 冲四级）
+            let is_quiet = *move_hint_score < SCORE_BLOCKED_FOUR;
+            let reduce = if depth >= 5 && idx >= 4 && is_quiet { 1 } else { 0 };
+            let search_depth = (depth - 1 - reduce).max(0);
+
+            // PVS（Principal Variation Search）
+            // 首着全窗口，后续先零窗口探测，必要时再全窗口重搜
+            let mut score = if first_move {
+                -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash)
+            } else {
+                let mut s = -self.minimax(&new_board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash);
+                if s > alpha && s < beta {
+                    s = -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash);
+                }
+                s
+            };
+
+            // 若 LMR 降深后出现潜在改进，再用完整深度复核一次
+            if reduce > 0 && score > alpha {
+                score = -self.minimax(&new_board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash);
+            }
+
+            first_move = false;
 
             if score > alpha {
                 alpha = score;
@@ -678,17 +693,41 @@ impl GomokuAi {
             }
         }
 
-        // HARD / MASTER 增加全局战略评估：
-        // - 中心控制（开中盘布局能力）
-        // - 连通度（蛇形潜伏/连线组织能力）
-        // - 机动性（周边可扩展空间）
-        if self.config.max_depth >= 20 {
-            score += self.strategic_eval(board, player, MASTER_CENTER_W, MASTER_LINK_W, MASTER_MOBILITY_W);
-        } else if self.config.max_depth >= 12 {
-            score += self.strategic_eval(board, player, HARD_CENTER_W, HARD_LINK_W, HARD_MOBILITY_W);
+        // HARD / MASTER 增加全局战略评估（分阶段权重）：
+        // opening: 中心/连通优先；middlegame: 平衡；endgame: 机动/线压优先
+        if self.config.max_depth >= 12 {
+            let is_master = self.config.max_depth >= 20;
+            let (center_w, link_w, mobility_w, line_w) =
+                self.phase_weights(board.move_count, is_master);
+
+            score += self.strategic_eval(board, player, center_w, link_w, mobility_w);
+            score += self.line_pressure_eval(board, player, line_w);
         }
 
         score
+    }
+
+    fn phase_weights(&self, move_count: usize, is_master: bool) -> (i32, i32, i32, i32) {
+        if is_master {
+            if move_count <= 12 {
+                // 开局：强调中心 + 结构搭建
+                (30, 18, 4, 16)
+            } else if move_count <= 50 {
+                // 中盘：平衡攻防与布局
+                (22, 14, 7, 20)
+            } else {
+                // 残局：强调线压与可拓展空间
+                (14, 12, 10, 26)
+            }
+        } else {
+            if move_count <= 12 {
+                (14, 10, 3, 10)
+            } else if move_count <= 50 {
+                (11, 9, 5, 12)
+            } else {
+                (8, 8, 8, 16)
+            }
+        }
     }
 
     fn strategic_eval(
@@ -738,6 +777,73 @@ impl GomokuAi {
 
                 total += sign * links * link_w;
                 total += sign * mobility * mobility_w;
+            }
+        }
+
+        total
+    }
+
+    /// 线压评估：只从每条连续链的“起点”统计一次，
+    /// 结合链长与两端开放性，强化“伏脉千里”的连线布局能力。
+    fn line_pressure_eval(&self, board: &Board, player: Color, line_w: i32) -> i32 {
+        let dirs = [(1i32, 0i32), (0, 1), (1, 1), (1, -1)];
+        let mut total = 0i32;
+
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                let color = board.get(r, c);
+                if color == Color::Empty {
+                    continue;
+                }
+
+                let sign = if color == player { 1 } else { -1 };
+
+                for &(dr, dc) in &dirs {
+                    // 仅链起点计分，避免重复计算
+                    let pr = r as i32 - dr;
+                    let pc = c as i32 - dc;
+                    if pr >= 0
+                        && pr < BOARD_SIZE as i32
+                        && pc >= 0
+                        && pc < BOARD_SIZE as i32
+                        && board.get(pr as usize, pc as usize) == color
+                    {
+                        continue;
+                    }
+
+                    // 统计连续链长
+                    let mut len = 0i32;
+                    let mut rr = r as i32;
+                    let mut cc = c as i32;
+                    while rr >= 0
+                        && rr < BOARD_SIZE as i32
+                        && cc >= 0
+                        && cc < BOARD_SIZE as i32
+                        && board.get(rr as usize, cc as usize) == color
+                    {
+                        len += 1;
+                        rr += dr;
+                        cc += dc;
+                    }
+
+                    // 两端开放性
+                    let left_open = pr >= 0
+                        && pr < BOARD_SIZE as i32
+                        && pc >= 0
+                        && pc < BOARD_SIZE as i32
+                        && board.get(pr as usize, pc as usize) == Color::Empty;
+                    let right_open = rr >= 0
+                        && rr < BOARD_SIZE as i32
+                        && cc >= 0
+                        && cc < BOARD_SIZE as i32
+                        && board.get(rr as usize, cc as usize) == Color::Empty;
+                    let open_ends = (left_open as i32) + (right_open as i32);
+
+                    if len >= 2 {
+                        let shape = len * len * (1 + open_ends);
+                        total += sign * shape * line_w;
+                    }
+                }
             }
         }
 
