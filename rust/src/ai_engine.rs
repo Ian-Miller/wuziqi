@@ -232,6 +232,8 @@ pub struct GomokuAi {
     node_count: AtomicU64,
     /// 搜索开始时间（仅搜索线程访问）
     start_time: Instant,
+    /// 本回合动态时间预算（毫秒）
+    turn_time_limit_ms: u64,
     /// 跨回合历史：上一次 take_turn 完成的最大搜索深度（用于智能初始深度选择）
     last_completed_depth: i32,
     /// 跨回合历史：上一次最后一层搜索的耗时 ms（用于估算下一层时间）
@@ -257,6 +259,7 @@ impl GomokuAi {
             should_stop: Arc::new(AtomicBool::new(false)),
             node_count: AtomicU64::new(0),
             start_time: Instant::now(),
+            turn_time_limit_ms: config.time_limit_ms,
             last_completed_depth: 0,
             last_depth_time_ms: 0,
             last_root_score: 0,
@@ -279,6 +282,7 @@ impl GomokuAi {
         // 若在此处重置，会导致与 Kotlin invalidate() 的竞态（信号被吃掉）。
         self.node_count.store(0, Ordering::Relaxed);
         self.start_time = Instant::now();
+        self.turn_time_limit_ms = self.choose_turn_time_budget(board);
 
         // 1. 开局库（前几手立即响应，不耗时）
         if let Some(m) = self.opening_book(board) {
@@ -301,6 +305,25 @@ impl GomokuAi {
 
         // 4. 迭代加深搜索（含智能深度选择 + 杀棋检测）
         Some(self.iterative_deepening(board, &moves))
+    }
+
+    /// 根据局面阶段为当前回合分配时间预算。
+    ///
+    /// 目标：MASTER 在开局第 2~3 手时不必用满 12s，
+    /// 但仍保留中后盘满预算，避免棋力下滑。
+    fn choose_turn_time_budget(&self, board: &Board) -> u64 {
+        let base = self.config.time_limit_ms;
+
+        // 仅对 MASTER 做开局预算下调（HARD 及以下保持原配置）
+        if self.config.max_depth >= 20 {
+            match board.move_count {
+                0..=4 => base.min(4_000), // 你的场景：总第4手（AI第2手）
+                5..=8 => base.min(7_000),
+                _ => base,
+            }
+        } else {
+            base
+        }
     }
 
     // =========================================================================
@@ -549,8 +572,7 @@ impl GomokuAi {
                 }
 
                 let remaining = self
-                    .config
-                    .time_limit_ms
+                    .turn_time_limit_ms
                     .saturating_sub(self.start_time.elapsed().as_millis() as u64);
 
                 current_depth += if remaining > last_layer_ms * FAST_JUMP_RATIO {
@@ -741,11 +763,11 @@ impl GomokuAi {
         };
 
         // 基于时间限制
-        let time_base = if self.config.time_limit_ms >= 8000 {
+        let time_base = if self.turn_time_limit_ms >= 8000 {
             4 // 8 秒+：从深度 4 开始
-        } else if self.config.time_limit_ms >= 3000 {
+        } else if self.turn_time_limit_ms >= 3000 {
             3 // 3–8 秒：从深度 3 开始
-        } else if self.config.time_limit_ms >= 1000 {
+        } else if self.turn_time_limit_ms >= 1000 {
             2 // 1–3 秒：从深度 2 开始
         } else {
             1 // < 1 秒：从深度 1 开始
@@ -781,7 +803,7 @@ impl GomokuAi {
     /// 下一层预计耗时 = last_layer_ms * AFFORD_RATIO（保守估计分支因子）。
     fn can_afford_depth(&self, last_layer_ms: u64) -> bool {
         let elapsed = self.start_time.elapsed().as_millis() as u64;
-        let remaining = self.config.time_limit_ms.saturating_sub(elapsed);
+        let remaining = self.turn_time_limit_ms.saturating_sub(elapsed);
         remaining > last_layer_ms * AFFORD_RATIO
     }
 
@@ -1178,7 +1200,7 @@ impl GomokuAi {
         // 每 TIME_CHECK_FREQ 个节点检查一次系统时间（避免频繁 syscall）
         let n = self.node_count.fetch_add(1, Ordering::Relaxed);
         if n % TIME_CHECK_FREQ == 0 {
-            if self.start_time.elapsed().as_millis() as u64 > self.config.time_limit_ms {
+            if self.start_time.elapsed().as_millis() as u64 > self.turn_time_limit_ms {
                 return false;
             }
         }
@@ -1191,7 +1213,7 @@ impl GomokuAi {
         if self.should_stop.load(Ordering::Acquire) {
             return false;
         }
-        self.start_time.elapsed().as_millis() as u64 <= self.config.time_limit_ms
+        self.start_time.elapsed().as_millis() as u64 <= self.turn_time_limit_ms
     }
 
     // =========================================================================
@@ -1215,6 +1237,7 @@ impl GomokuAi {
     pub fn clear(&mut self) {
         self.node_count.store(0, Ordering::Relaxed);
         self.start_time = Instant::now();
+        self.turn_time_limit_ms = self.config.time_limit_ms;
         self.decay_history();
         self.eval_cache.clear();
         // 注意：不重置 last_completed_depth / last_depth_time_ms
