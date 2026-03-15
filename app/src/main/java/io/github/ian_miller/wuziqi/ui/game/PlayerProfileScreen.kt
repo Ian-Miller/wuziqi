@@ -18,7 +18,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import io.github.ian_miller.wuziqi.domain.model.Difficulty
 import io.github.ian_miller.wuziqi.domain.model.GameMode
 import io.github.ian_miller.wuziqi.domain.repository.Player

@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import io.github.ian_miller.wuziqi.domain.model.PieceColor
 import io.github.ian_miller.wuziqi.ui.game.BoardCanvas
 import io.github.ian_miller.wuziqi.ui.game.GameStatus
