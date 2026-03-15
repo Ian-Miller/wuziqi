@@ -153,6 +153,7 @@ pub struct MctsAi {
     config: MctsConfig,
     should_stop: Arc<AtomicBool>,
     start_time: Instant,
+    easy_mode: bool,
     /// 轻度失误概率（EASY > MEDIUM）
     mistake_prob: f64,
     /// 视野收窄概率（模拟新手“只看局部”）
@@ -185,6 +186,7 @@ impl MctsAi {
             config,
             should_stop: Arc::new(AtomicBool::new(false)),
             start_time: Instant::now(),
+            easy_mode: is_easy,
             mistake_prob,
             narrow_vision_prob,
             sample_temperature,
@@ -204,7 +206,7 @@ impl MctsAi {
         self.start_time = Instant::now();
 
         // 1. 开局库（前几手立即响应）
-        if let Some(m) = opening_book(board) {
+        if let Some(m) = self.opening_book(board) {
             return Some(m);
         }
 
@@ -597,6 +599,84 @@ impl MctsAi {
         self.rand_f64() < p
     }
 
+    /// 开局库（EASY：带新手偏差；MEDIUM：稳健）
+    fn opening_book(&mut self, board: &Board) -> Option<(usize, usize)> {
+        const CENTER: (usize, usize) = (7, 7);
+
+        match board.move_count {
+            0 => Some(CENTER),
+            1 => {
+                if board.is_empty(CENTER.0, CENTER.1) {
+                    return Some(CENTER);
+                }
+
+                let standard = [
+                    (6, 7), (8, 7), (7, 6), (7, 8),
+                    (6, 6), (8, 8), (6, 8), (8, 6),
+                ];
+
+                if self.easy_mode {
+                    // 新手常见偏差：走外圈、拉开形状、忽视紧凑中心
+                    let novice = [
+                        (5, 7), (9, 7), (7, 5), (7, 9),
+                        (5, 5), (9, 9), (5, 9), (9, 5),
+                        (6, 9), (9, 6), (8, 5), (5, 8),
+                    ];
+                    if self.roll(0.35) {
+                        if let Some(m) = self.pick_from_available(board, &novice) {
+                            return Some(m);
+                        }
+                    }
+                    if let Some(m) = self.pick_from_available(board, &standard) {
+                        return Some(m);
+                    }
+                }
+
+                standard.iter().find(|&&p| board.is_empty(p.0, p.1)).copied()
+            }
+            2 => {
+                let near = [
+                    (7, 7), (6, 7), (8, 7), (7, 6), (7, 8),
+                    (6, 6), (8, 8), (6, 8), (8, 6),
+                ];
+
+                if self.easy_mode {
+                    let novice_wide = [
+                        (5, 6), (5, 8), (6, 5), (8, 5),
+                        (9, 6), (9, 8), (6, 9), (8, 9),
+                        (4, 7), (10, 7), (7, 4), (7, 10),
+                    ];
+                    if self.roll(0.40) {
+                        if let Some(m) = self.pick_from_available(board, &novice_wide) {
+                            return Some(m);
+                        }
+                    }
+                    if let Some(m) = self.pick_from_available(board, &near) {
+                        return Some(m);
+                    }
+                }
+
+                near.iter().find(|&&p| board.is_empty(p.0, p.1)).copied()
+            }
+            _ => None,
+        }
+    }
+
+    fn pick_from_available(&mut self, board: &Board, candidates: &[(usize, usize)]) -> Option<(usize, usize)> {
+        let available: Vec<(usize, usize)> = candidates
+            .iter()
+            .copied()
+            .filter(|&(r, c)| board.is_empty(r, c))
+            .collect();
+
+        if available.is_empty() {
+            None
+        } else {
+            let idx = (self.rand_u64() as usize) % available.len();
+            Some(available[idx])
+        }
+    }
+
     /// 对访问次数做 softmax 抽样（温度越高越随机）
     fn sample_softmax(&mut self, items: &[((usize, usize), u32)], temp: f64) -> Option<(usize, usize)> {
         if items.is_empty() {
@@ -821,30 +901,4 @@ fn threat_score(board: &Board, row: usize, col: usize, mover: Color, opp: Color)
     bonus
 }
 
-/// 开局库（与 GomokuAi 保持一致）
-fn opening_book(board: &Board) -> Option<(usize, usize)> {
-    const CENTER: (usize, usize) = (7, 7);
-    match board.move_count {
-        0 => Some(CENTER),
-        1 => {
-            if board.is_empty(CENTER.0, CENTER.1) {
-                Some(CENTER)
-            } else {
-                let candidates = [
-                    (6, 7), (8, 7), (7, 6), (7, 8),
-                    (6, 6), (8, 8), (6, 8), (8, 6),
-                    (5, 7), (9, 7), (7, 5), (7, 9),
-                ];
-                candidates.iter().find(|&&p| board.is_empty(p.0, p.1)).copied()
-            }
-        }
-        2 => {
-            let near = [
-                (7, 7), (6, 7), (8, 7), (7, 6), (7, 8),
-                (6, 6), (8, 8), (6, 8), (8, 6),
-            ];
-            near.iter().find(|&&p| board.is_empty(p.0, p.1)).copied()
-        }
-        _ => None,
-    }
-}
+

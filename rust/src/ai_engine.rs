@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::board::{Board, Color, BOARD_SIZE};
-use crate::evaluator::{evaluate_position, SCORE_BLOCKED_FOUR};
+use crate::evaluator::{evaluate_position, SCORE_BLOCKED_FOUR, SCORE_THREE};
 
 /// 胜利分数（五连或搜索路径内的强制赢棋）
 const WIN_SCORE: i32 = 1_000_000;
@@ -279,7 +279,60 @@ impl GomokuAi {
         let my = evaluate_position(board, row, col, self.config.player);
         let opp = evaluate_position(board, row, col, self.config.player.opponent());
         // 进攻分全值 + 防御分 9/10（轻微偏向进攻）
-        my + opp * 9 / 10
+        let mut score = my + opp * 9 / 10;
+
+        // MASTER 专属：轻量两步计划加权（不做完整前瞻，仅用于走法排序）
+        if self.config.max_depth >= 20 {
+            score += self.master_plan_bonus(board, row, col);
+        }
+
+        score
+    }
+
+    /// MASTER 轻量计划分：
+    /// - 落子后若让对手出现一步五连，强烈惩罚（避免“漂亮但送死”的布局）
+    /// - 评估下一手可形成的高威胁密度（冲四/活三）
+    /// - 用于根节点排序，不改变规则正确性
+    fn master_plan_bonus(&self, board: &Board, row: usize, col: usize) -> i32 {
+        let mut b = board.clone();
+        if !b.place(row, col, self.config.player) {
+            return -500_000;
+        }
+
+        let opp = self.config.player.opponent();
+        let next = b.generate_moves();
+
+        // 1) 防止“下完被秒杀”
+        let opp_can_win = next.iter().any(|&(r, c)| {
+            let mut t = b.clone();
+            t.place(r, c, opp) && t.check_win(r, c, opp)
+        });
+        if opp_can_win {
+            return -220_000;
+        }
+
+        // 2) 统计我方后续高威胁点密度（蛇线伏脉）
+        let mut high_threat_count = 0i32;
+        let mut mid_threat_count = 0i32;
+        let mut best_follow = 0i32;
+
+        for (idx, (r, c)) in next.iter().copied().enumerate() {
+            // 控制计算量：只看前 24 个候选
+            if idx >= 24 {
+                break;
+            }
+            let s = evaluate_position(&b, r, c, self.config.player);
+            if s >= SCORE_BLOCKED_FOUR {
+                high_threat_count += 1;
+            } else if s >= SCORE_THREE {
+                mid_threat_count += 1;
+            }
+            if s > best_follow {
+                best_follow = s;
+            }
+        }
+
+        high_threat_count * 4_000 + mid_threat_count * 900 + best_follow / 10
     }
 
     // =========================================================================
