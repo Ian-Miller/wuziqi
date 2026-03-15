@@ -25,10 +25,10 @@ const WIN_VALUE: f64 = 1.0;
 const LOSE_VALUE: f64 = -1.0;
 
 /// 静态评估分数缩放系数（将 i32 评估值归一化到 (-1, 1)）
-/// 实测：中局含威胁的局面总分约 50_000–200_000，
-/// 用 250_000 让利用项在 [-0.8, 0.8] 范围内，UCB1 才能正常工作。
-/// 原 2_000_000 导致 exploit ≈ 0，MCTS 退化为纯随机。
-const EVAL_SCALE: f64 = 250_000.0;
+/// 实测：改用 generate_moves() 后，候选区域约 40-80 格（非全盘 225 格），
+/// 中局含威胁的局面净分约 20_000–100_000。
+/// 用 100_000 让利用项在 [-1.0, 1.0] 范围内充分区分优劣。
+const EVAL_SCALE: f64 = 100_000.0;
 
 /// 每个节点最多扩展的候选走法数（分支因子上限）
 pub const MAX_CHILDREN_EASY: usize = 15;
@@ -126,16 +126,13 @@ impl MctsNode {
         }
     }
 
-    /// UCB1 得分（从父节点角度评价子节点价值）
-    fn ucb1(&self, parent_visits: u32, c: f64) -> f64 {
+    /// UCB1 得分（带视角参数，sign=+1 AI层，-1 对手层）
+    fn ucb1(&self, parent_visits: u32, c: f64, sign: f64) -> f64 {
         if self.visits == 0 {
             return f64::INFINITY;
         }
-        // 本实现中 total_value 统一使用“AI（根）视角”累计，
-        // 因此在 UCB 利用项中应直接使用 avg，不能取反。
-        // 之前错误取反会导致树策略偏向低价值分支，表现为“离谱乱下”。
         let avg = self.total_value / self.visits as f64;
-        let exploit = avg;
+        let exploit = sign * avg;
         let explore = c * ((parent_visits as f64).ln() / self.visits as f64).sqrt();
         exploit + explore
     }
@@ -459,7 +456,7 @@ impl MctsAi {
             let next_mover = child_color.opponent();
             let max_c = self.config.max_children;
             let child_untried = top_k_moves(board, next_mover, max_c);
-            debug_assert!(board.unplace(mv.0, mv.1));
+            board.unplace(mv.0, mv.1);
 
             let child = MctsNode {
                 mv: Some(mv),
@@ -509,16 +506,18 @@ impl MctsAi {
                 return (node, current_mover, path);
             }
 
-            // 选择 UCB1 最大的子节点
+            // 选择 UCB1 最大的子节点（视角由 current_mover 决定）
             let parent_visits = n.visits;
             let c = self.config.exploration_c;
+            // AI 执手层 sign=+1（选高价值子节点）；对手执手层 sign=-1（模拟对手最优应对）
+            let sign = if current_mover == self.config.player { 1.0 } else { -1.0 };
             let best_idx = n
                 .children
                 .iter()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| {
-                    a.ucb1(parent_visits, c)
-                        .partial_cmp(&b.ucb1(parent_visits, c))
+                    a.ucb1(parent_visits, c, sign)
+                        .partial_cmp(&b.ucb1(parent_visits, c, sign))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|(i, _)| i)
@@ -567,13 +566,16 @@ impl MctsAi {
         let player = self.config.player;
         let opp = player.opponent();
 
-        for r in 0..BOARD_SIZE {
-            for c in 0..BOARD_SIZE {
-                if board.get(r, c) == Color::Empty {
-                    score += evaluate_position(board, r, c, player) as i64;
-                    score -= evaluate_position(board, r, c, opp) as i64 * 9 / 10;
-                }
-            }
+        // 仅评估候选区域（已有棋子周围 2 格内的空位），而非全盘 225 格。
+        // 与 minimax 的 static_eval 一致，大幅降低叶子评估开销，
+        // 使 MCTS 在相同时间内能完成更多迭代。
+        let candidates = board.generate_moves();
+        if candidates.is_empty() {
+            return 0.0;
+        }
+        for (r, c) in candidates {
+            score += evaluate_position(board, r, c, player) as i64;
+            score -= evaluate_position(board, r, c, opp) as i64 * 9 / 10;
         }
 
         // 钳制到 [-1, 1]
@@ -593,7 +595,7 @@ impl MctsAi {
         for &(r, c) in moves {
             if b.place(r, c, self.config.player) {
                 let win = b.check_win(r, c, self.config.player);
-                debug_assert!(b.unplace(r, c));
+                b.unplace(r, c);
                 if win {
                     return Some((r, c));
                 }
@@ -608,7 +610,7 @@ impl MctsAi {
         for &(r, c) in moves {
             if b.place(r, c, opp) {
                 let win = b.check_win(r, c, opp);
-                debug_assert!(b.unplace(r, c));
+                b.unplace(r, c);
                 if win {
                     return Some((r, c));
                 }
@@ -845,14 +847,12 @@ impl MctsAi {
         for (r, c) in next_moves {
             if b.place(r, c, opp) {
                 let win = b.check_win(r, c, opp);
-                debug_assert!(b.unplace(r, c));
+                b.unplace(r, c);
                 if win {
-                    debug_assert!(b.unplace(mv.0, mv.1));
                     return true;
                 }
             }
         }
-        debug_assert!(b.unplace(mv.0, mv.1));
         false
     }
 
@@ -867,11 +867,9 @@ impl MctsAi {
         for (r, c) in next_moves {
             let s = evaluate_position(&b, r, c, opp);
             if s >= SCORE_FOUR {
-                debug_assert!(b.unplace(mv.0, mv.1));
                 return true;
             }
         }
-        debug_assert!(b.unplace(mv.0, mv.1));
         false
     }
 }
