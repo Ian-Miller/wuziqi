@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use std::collections::VecDeque;
 
 use crate::board::{Board, Color, BOARD_SIZE};
 use crate::evaluator::{evaluate_position, SCORE_BLOCKED_FOUR, SCORE_THREE};
@@ -28,6 +29,12 @@ const AFFORD_RATIO: u64 = 3;
 const ASPIRATION_MARGIN_BASE: i32 = 1_200;
 const ASPIRATION_MARGIN_STEP: i32 = 2_000;
 const ASPIRATION_RETRY_MAX: i32 = 2;
+
+/// MASTER 根节点候选去冗余：前排候选若过于邻近，延后处理
+const MASTER_REDUNDANT_RADIUS: i32 = 1;
+
+/// 记录最近若干次决策（主要用于“撤销后反复同手”惩罚）
+const DECISION_HISTORY_CAP: usize = 24;
 
 // ============================================================================
 // 置换表（Transposition Table）
@@ -182,6 +189,8 @@ pub struct GomokuAi {
     last_depth_time_ms: u64,
     /// 跨回合历史：上一次根节点评估分（用于 aspiration window）
     last_root_score: i32,
+    /// 最近的根节点决策历史：[(root_hash, move)]
+    recent_decisions: VecDeque<(u64, (usize, usize))>,
     /// Zobrist 哈希表（固定不变，在构造时初始化）
     zobrist: ZobristTable,
 }
@@ -196,6 +205,7 @@ impl GomokuAi {
             last_completed_depth: 0,
             last_depth_time_ms: 0,
             last_root_score: 0,
+            recent_decisions: VecDeque::with_capacity(DECISION_HISTORY_CAP),
             zobrist: ZobristTable::new(),
         }
     }
@@ -504,6 +514,9 @@ impl GomokuAi {
             }
         }
 
+        // 记录本次根节点决策（用于重复局面惩罚）
+        self.remember_root_decision(root_hash, best_move);
+
         best_move
     }
 
@@ -528,7 +541,7 @@ impl GomokuAi {
 
         // 将置换表中的最佳走法移到列表首位（走法排序优化）
         let tt_best = tt.get(root_hash).and_then(|e| e.best_move);
-        let ordered: Vec<(usize, usize)> = if let Some(tb) = tt_best {
+        let ordered_base: Vec<(usize, usize)> = if let Some(tb) = tt_best {
             let mut v: Vec<(usize, usize)> = moves.iter().copied()
                 .filter(|&m| m != tb)
                 .collect();
@@ -536,6 +549,13 @@ impl GomokuAi {
             v
         } else {
             moves.to_vec()
+        };
+
+        // MASTER：抑制前排候选过于同质（同一小区域扎堆）
+        let ordered: Vec<(usize, usize)> = if self.config.max_depth >= 20 {
+            self.suppress_root_redundancy(&ordered_base)
+        } else {
+            ordered_base
         };
 
         for &(row, col) in &ordered {
@@ -564,8 +584,17 @@ impl GomokuAi {
                 child_hash,
             );
 
-            if score > alpha {
-                alpha = score;
+            // 根节点重复局面惩罚（主要改善撤销/重试时“机械复读同一步”）
+            let adjusted_score = if self.config.max_depth >= 20 {
+                let penalty = self.root_repetition_penalty(root_hash, (row, col));
+                // 若是明确杀棋分，不做惩罚，避免错失战术手
+                if score >= KILL_THRESHOLD { score } else { score - penalty }
+            } else {
+                score
+            };
+
+            if adjusted_score > alpha {
+                alpha = adjusted_score;
                 best = (row, col);
             }
 
@@ -581,6 +610,53 @@ impl GomokuAi {
         }
 
         (best, !timed_out, found_win, alpha)
+    }
+
+    fn suppress_root_redundancy(&self, ordered: &[(usize, usize)]) -> Vec<(usize, usize)> {
+        if ordered.len() <= 4 {
+            return ordered.to_vec();
+        }
+
+        let mut selected: Vec<(usize, usize)> = Vec::with_capacity(ordered.len());
+        let mut delayed: Vec<(usize, usize)> = Vec::new();
+
+        for &m in ordered {
+            let mut too_close = false;
+            for &s in &selected {
+                let dr = (m.0 as i32 - s.0 as i32).abs();
+                let dc = (m.1 as i32 - s.1 as i32).abs();
+                if dr.max(dc) <= MASTER_REDUNDANT_RADIUS {
+                    too_close = true;
+                    break;
+                }
+            }
+
+            if too_close && selected.len() < 8 {
+                delayed.push(m);
+            } else {
+                selected.push(m);
+            }
+        }
+
+        selected.extend(delayed);
+        selected
+    }
+
+    fn root_repetition_penalty(&self, root_hash: u64, mv: (usize, usize)) -> i32 {
+        let mut repeats = 0i32;
+        for &(h, m) in &self.recent_decisions {
+            if h == root_hash && m == mv {
+                repeats += 1;
+            }
+        }
+        if repeats <= 0 { 0 } else { repeats * 8_000 }
+    }
+
+    fn remember_root_decision(&mut self, root_hash: u64, mv: (usize, usize)) {
+        if self.recent_decisions.len() >= DECISION_HISTORY_CAP {
+            self.recent_decisions.pop_front();
+        }
+        self.recent_decisions.push_back((root_hash, mv));
     }
 
     // =========================================================================
