@@ -335,11 +335,13 @@ impl MctsAi {
             // 展开一个未尝试的走法
             let mv = leaf_ref.untried_moves.remove(0);
             let child_color = depth_color; // 即将落子的颜色
-            let mut child_board = board.clone();
-            child_board.place(mv.0, mv.1, child_color);
+            if !board.place(mv.0, mv.1, child_color) {
+                // 理论上不应发生（untried_moves 都是合法空位），保底处理
+                return;
+            }
 
             // 立即胜利检测
-            if child_board.check_win(mv.0, mv.1, child_color) {
+            if board.check_win(mv.0, mv.1, child_color) {
                 value = if child_color == self.config.player {
                     WIN_VALUE
                 } else {
@@ -347,17 +349,20 @@ impl MctsAi {
                 };
             } else {
                 // 静态评估（替代随机 Rollout）
-                value = self.static_eval_normalized(&child_board);
+                value = self.static_eval_normalized(board);
             }
 
             let next_mover = child_color.opponent();
             let max_c = self.config.max_children;
+            let child_untried = top_k_moves(board, next_mover, max_c);
+            board.unplace(mv.0, mv.1);
+
             let child = MctsNode {
                 mv: Some(mv),
                 color: child_color,
                 visits: 1,
                 total_value: value,
-                untried_moves: top_k_moves(&child_board, next_mover, max_c),
+                untried_moves: child_untried,
                 children: Vec::new(),
             };
             leaf_ref.children.push(child);
@@ -474,10 +479,14 @@ impl MctsAi {
         board: &Board,
         moves: &[(usize, usize)],
     ) -> Option<(usize, usize)> {
+        let mut b = board.clone();
         for &(r, c) in moves {
-            let mut b = board.clone();
-            if b.place(r, c, self.config.player) && b.check_win(r, c, self.config.player) {
-                return Some((r, c));
+            if b.place(r, c, self.config.player) {
+                let win = b.check_win(r, c, self.config.player);
+                b.unplace(r, c);
+                if win {
+                    return Some((r, c));
+                }
             }
         }
         None
@@ -485,10 +494,14 @@ impl MctsAi {
 
     fn find_must_block(&self, board: &Board, moves: &[(usize, usize)]) -> Option<(usize, usize)> {
         let opp = self.config.player.opponent();
+        let mut b = board.clone();
         for &(r, c) in moves {
-            let mut b = board.clone();
-            if b.place(r, c, opp) && b.check_win(r, c, opp) {
-                return Some((r, c));
+            if b.place(r, c, opp) {
+                let win = b.check_win(r, c, opp);
+                b.unplace(r, c);
+                if win {
+                    return Some((r, c));
+                }
             }
         }
         None
@@ -719,10 +732,18 @@ impl MctsAi {
         }
         let opp = mover.opponent();
         let next_moves = b.generate_moves();
-        next_moves.into_iter().any(|(r, c)| {
-            let mut t = b.clone();
-            t.place(r, c, opp) && t.check_win(r, c, opp)
-        })
+        for (r, c) in next_moves {
+            if b.place(r, c, opp) {
+                let win = b.check_win(r, c, opp);
+                b.unplace(r, c);
+                if win {
+                    b.unplace(mv.0, mv.1);
+                    return true;
+                }
+            }
+        }
+        b.unplace(mv.0, mv.1);
+        false
     }
 }
 
