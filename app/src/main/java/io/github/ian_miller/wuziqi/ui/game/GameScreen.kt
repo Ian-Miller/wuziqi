@@ -153,6 +153,7 @@ private fun GameAppContent(menuViewModel: MenuViewModel) {
         ) {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
+                viewModel = menuViewModel,
             )
         }
 

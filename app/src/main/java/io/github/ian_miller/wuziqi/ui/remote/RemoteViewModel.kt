@@ -81,6 +81,10 @@ class RemoteViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
+    companion object {
+        private const val KEY_RELAY_BLOCKED_PERMANENT = "relay_blocked_permanent"
+    }
+
     private val prefs = context.getSharedPreferences("nostr_prefs", Context.MODE_PRIVATE)
     private val keyPair: NostrKeyPair by lazy { NostrKeyStore.load(prefs) }
     private val client = NostrClient()
@@ -111,6 +115,9 @@ class RemoteViewModel @Inject constructor(
     private val _vibrationEnabled = MutableStateFlow(gomokuPrefs.getBoolean("vibration_enabled", true))
     val vibrationEnabled: StateFlow<Boolean> = _vibrationEnabled.asStateFlow()
 
+    private fun isRelayBlockedPermanently(): Boolean =
+        prefs.getBoolean(KEY_RELAY_BLOCKED_PERMANENT, false)
+
     fun setSoundEnabled(enabled: Boolean) {
         gomokuPrefs.edit().putBoolean("sound_enabled", enabled).apply()
         _soundEnabled.value = enabled
@@ -124,7 +131,11 @@ class RemoteViewModel @Inject constructor(
     val relayStatus = client.relayStatus
 
     init {
-        client.connect(viewModelScope)
+        if (!isRelayBlockedPermanently()) {
+            client.connect(viewModelScope)
+        } else {
+            _state.update { it.copy(nostrAvailable = false) }
+        }
         viewModelScope.launch {
             client.events.collect { event -> handleEvent(event) }
         }
@@ -293,8 +304,7 @@ class RemoteViewModel @Inject constructor(
     // ── 中继可用性检测 ─────────────────────────────────────────────────────────
 
     fun pingRelays() {
-        val blockedUntil = prefs.getLong("relay_blocked_until", 0L)
-        if (blockedUntil > System.currentTimeMillis()) {
+        if (isRelayBlockedPermanently()) {
             _state.update { it.copy(nostrAvailable = false) }
             return
         }
@@ -306,15 +316,16 @@ class RemoteViewModel @Inject constructor(
             val available = connected > 0
             _state.update { it.copy(nostrAvailable = available) }
             if (!available) {
-                prefs.edit().putLong("relay_blocked_until", System.currentTimeMillis() + 3_600_000L).apply()
+                prefs.edit().putBoolean(KEY_RELAY_BLOCKED_PERMANENT, true).apply()
+                client.disconnect()
             } else {
-                prefs.edit().remove("relay_blocked_until").apply()
+                prefs.edit().putBoolean(KEY_RELAY_BLOCKED_PERMANENT, false).apply()
             }
         }
     }
 
     fun retryRelayConnection() {
-        prefs.edit().remove("relay_blocked_until").apply()
+        prefs.edit().putBoolean(KEY_RELAY_BLOCKED_PERMANENT, false).apply()
         _state.update { it.copy(nostrAvailable = null) }
         client.disconnect()
         client.connect(viewModelScope)
@@ -324,9 +335,10 @@ class RemoteViewModel @Inject constructor(
             val available = connected > 0
             _state.update { it.copy(nostrAvailable = available) }
             if (!available) {
-                prefs.edit().putLong("relay_blocked_until", System.currentTimeMillis() + 3_600_000L).apply()
+                prefs.edit().putBoolean(KEY_RELAY_BLOCKED_PERMANENT, true).apply()
+                client.disconnect()
             } else {
-                prefs.edit().remove("relay_blocked_until").apply()
+                prefs.edit().putBoolean(KEY_RELAY_BLOCKED_PERMANENT, false).apply()
             }
         }
     }
@@ -339,7 +351,7 @@ class RemoteViewModel @Inject constructor(
 
     fun createRoom() {
         if (_state.value.nostrAvailable == false) {
-            retryRelayConnection()
+            _state.update { it.copy(phase = RemotePhase.Error("中继不可用。请使用局域网模式，或手动重试中继连接。")) }
             return
         }
         val gameId = UUID.randomUUID().toString().replace("-", "").take(16)
@@ -366,7 +378,15 @@ class RemoteViewModel @Inject constructor(
 
     fun joinRoom() {
         val code = _state.value.joinInputCode.trim()
-        if (LanInviteCode.isLanCode(code)) joinRoomLan(code) else joinRoomNostr(code)
+        if (LanInviteCode.isLanCode(code)) {
+            joinRoomLan(code)
+        } else {
+            if (_state.value.nostrAvailable == false || isRelayBlockedPermanently()) {
+                _state.update { it.copy(phase = RemotePhase.Error("中继不可用，无法加入线上房间。请改用局域网模式。")) }
+                return
+            }
+            joinRoomNostr(code)
+        }
     }
 
     // ── 局域网模式 ─────────────────────────────────────────────────────────────

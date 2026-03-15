@@ -1476,7 +1476,37 @@ class GameViewModelV2 @Inject constructor(
         prefs.getString("saved_game_${mode.name}", null) != null
 
     private fun saveGameRecord(state: State.GameOver) {
-        // TODO: 保存对战记录
+        if (state.mode != GameMode.VS_AI) return
+
+        val playerId = prefs.getLong("selected_player_id", -1L)
+        if (playerId <= 0L) return
+
+        val aiColor = state.aiPlayerColor ?: return
+        val humanColor = aiColor.opposite()
+
+        val result = when (val winner = state.winner) {
+            null -> io.github.ian_miller.wuziqi.domain.repository.GameResult.DRAW
+            humanColor -> io.github.ian_miller.wuziqi.domain.repository.GameResult.WIN
+            else -> io.github.ian_miller.wuziqi.domain.repository.GameResult.LOSE
+        }
+
+        val boardSnapshot = state.moveHistory.joinToString("|") {
+            "${it.row},${it.col},${it.color.name}"
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                repository.saveGameRecord(
+                    playerId = playerId,
+                    opponentId = null,
+                    gameMode = GameMode.VS_AI,
+                    difficulty = state.difficulty,
+                    result = result,
+                    boardSnapshot = boardSnapshot,
+                    moves = state.moveHistory.size,
+                )
+            }
+        }
     }
     
     /**
