@@ -267,7 +267,7 @@ fun RemoteGameScreen(
                             ) {
                                 Icon(Icons.Default.Balance, null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("请求和棋")
+                                Text(s.requestDraw)
                             }
                             GlassyButton(
                                 onClick = { showResignDialog = true },
@@ -277,7 +277,7 @@ fun RemoteGameScreen(
                             ) {
                                 Icon(Icons.Default.Flag, null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("认输")
+                                Text(s.resign)
                             }
                         }
                     }
@@ -357,7 +357,7 @@ fun RemoteGameScreen(
                 // 游戏结束后显示明确的“退出对局”按钮
                 if (gameState.isGameOver) {
                     IconButton(
-                        onClick = { viewModel.clearSavedGame(); onBack() },
+                        onClick = { viewModel.reset(); onBack() },
                         modifier = Modifier.background(
                             Color(0xFF5D4037).copy(alpha = 0.75f),
                             RoundedCornerShape(50),

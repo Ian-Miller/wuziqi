@@ -114,8 +114,8 @@ class LanGameBridge(
     /** 向对端发送消息（Server 模式广播，Client 模式直发） */
     fun send(msg: GameMsg) {
         val json = JsonCodec.encodeToString(msg)
-        peerConn?.send(json)   // 房主 → Joiner
-        client?.send(json)     // Joiner → 房主
+        runCatching { peerConn?.send(json) }   // 房主 → Joiner
+        runCatching { client?.send(json) }     // Joiner → 房主
     }
 
     /**

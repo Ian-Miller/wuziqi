@@ -56,6 +56,13 @@ fun RemoteLobbyScreen(
         }
     }
 
+    // 对局已结束时自动重置到 Idle（防止大厅显示"继续/认输"按钮）
+    LaunchedEffect(state.phase, gameState?.isGameOver) {
+        if (state.phase is RemotePhase.Connected && gameState?.isGameOver == true) {
+            viewModel.reset()
+        }
+    }
+
     val woodBrush = remember {
         Brush.verticalGradient(colors = listOf(Color(0xFFE0C39E), Color(0xFFA47E5C)))
     }

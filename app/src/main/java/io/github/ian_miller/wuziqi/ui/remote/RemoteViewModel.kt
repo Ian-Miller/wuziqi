@@ -551,10 +551,12 @@ class RemoteViewModel @Inject constructor(
     fun resignRemote() {
         val gs = _gameState.value ?: return
         val msg = GameMsg(MsgType.RESIGN, gameId = gs.gameId, seq = gs.mySeq)
-        lanBridge?.send(msg)
-        sendNostrGameMsg(msg)
+        // 先更新本地状态，确保即使发送失败也能正确清理
         _gameState.update { it?.copy(winner = gs.myColor.opposite(), isGameOver = true, mySeq = gs.mySeq + 1) }
         clearSavedGame()
+        // 尽力通知对方（发送失败不影响本地状态）
+        lanBridge?.send(msg)
+        sendNostrGameMsg(msg)
     }
 
     fun offerDraw() {
