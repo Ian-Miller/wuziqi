@@ -530,10 +530,14 @@ impl GomokuAi {
         board: &Board,
         moves: &[(usize, usize)],
     ) -> Option<(usize, usize)> {
+        let mut b = board.clone();
         for &(row, col) in moves {
-            let mut b = board.clone();
-            if b.place(row, col, self.config.player) && b.check_win(row, col, self.config.player) {
-                return Some((row, col));
+            if b.place(row, col, self.config.player) {
+                let win = b.check_win(row, col, self.config.player);
+                b.unplace(row, col);
+                if win {
+                    return Some((row, col));
+                }
             }
         }
         None
@@ -541,10 +545,14 @@ impl GomokuAi {
 
     fn find_must_block(&self, board: &Board, moves: &[(usize, usize)]) -> Option<(usize, usize)> {
         let opp = self.config.player.opponent();
+        let mut b = board.clone();
         for &(row, col) in moves {
-            let mut b = board.clone();
-            if b.place(row, col, opp) && b.check_win(row, col, opp) {
-                return Some((row, col));
+            if b.place(row, col, opp) {
+                let win = b.check_win(row, col, opp);
+                b.unplace(row, col);
+                if win {
+                    return Some((row, col));
+                }
             }
         }
         None
@@ -974,7 +982,7 @@ impl GomokuAi {
         player: Color,
         depth: i32,
         mut alpha: i32,
-        beta: i32,
+        mut beta: i32,
         hash: u64,
         ply: usize,
         last_move: Option<(usize, usize)>,
@@ -998,9 +1006,14 @@ impl GomokuAi {
                         }
                     }
                     TtFlag::UpperBound => {
-                        // 上界：实际值 <= entry.score。若上界 <= alpha，可以剪枝
+                        // 上界：实际值 <= entry.score
+                        // 1) 若上界 <= alpha，可以直接剪枝
                         if entry.score <= alpha {
                             return entry.score;
+                        }
+                        // 2) 缩窄 beta 窗口：实际值不超过 entry.score
+                        if entry.score < beta {
+                            beta = entry.score;
                         }
                     }
                 }

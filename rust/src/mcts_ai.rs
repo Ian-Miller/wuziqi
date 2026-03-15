@@ -77,8 +77,8 @@ impl MctsConfig {
     pub fn easy(player: Color) -> Self {
         Self {
             player,
-            time_limit_ms: 700,
-            exploration_c: 1.4,
+            time_limit_ms: 500,
+            exploration_c: 1.8,
             max_children: MAX_CHILDREN_EASY,
         }
     }
@@ -255,9 +255,15 @@ impl MctsAi {
             return None;
         }
         let mut candidates = top_k_moves(board, self.config.player, self.config.max_children);
-        if self.roll(self.narrow_vision_prob) && candidates.len() > 6 {
-            // 视野收窄：仅保留局部前列候选（模拟新手只看“眼前几手”）
-            candidates.truncate(6);
+        // 视野收窄：新手只看“眼前几手”，概率随棋盘密度上升
+        let vision_miss = if self.easy_mode {
+            self.narrow_vision_prob + self.attention_miss_prob(board) * 0.5
+        } else {
+            self.narrow_vision_prob
+        };
+        if self.roll(vision_miss) && candidates.len() > 5 {
+            let keep = if self.easy_mode { 4 } else { 5 };
+            candidates.truncate(keep);
         }
         if candidates.is_empty() {
             self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
@@ -276,15 +282,21 @@ impl MctsAi {
         }
 
         // 4. 深度 2：活四级威胁（确定性处理，不交给 MCTS）
+        // EASY 模式下，新手有一定概率看不到这些深层威胁（概率随棋盘密度增加而上升）
+        let skip_deep_threats = self.easy_mode && self.roll(self.attention_miss_prob(board));
         // 己方可形成活四/双四/三四 → 几乎必胜，直接走
-        if let Some(m) = self.find_forced_win(board, &all_moves) {
-            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
-            return Some(m);
+        if !skip_deep_threats {
+            if let Some(m) = self.find_forced_win(board, &all_moves) {
+                self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                return Some(m);
+            }
         }
         // 对方可形成活四/双四/三四 → 必须堵，否则对方下一步必胜
-        if let Some(m) = self.find_critical_block(board, &all_moves) {
-            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
-            return Some(m);
+        if !skip_deep_threats {
+            if let Some(m) = self.find_critical_block(board, &all_moves) {
+                self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                return Some(m);
+            }
         }
 
         // 5. MCTS 主搜索（处理非强制性的复杂局面）
@@ -301,11 +313,11 @@ impl MctsAi {
     pub fn new(config: MctsConfig) -> Self {
         let is_easy = config.exploration_c >= 1.8 || config.max_children >= MAX_CHILDREN_EASY;
         let (mistake_prob, narrow_vision_prob, sample_temperature, sample_top_n) = if is_easy {
-            // EASY：更像新手，允许更多“看走眼”和随机性
-            (0.10, 0.12, 0.95, 3)
+            // EASY：新手模拟——会犯明显错误、视野窄窄、抽样随机
+            (0.18, 0.22, 1.2, 4)
         } else {
-            // MEDIUM：爱好者，偶发失误但整体稳健
-            (0.0, 0.0, 0.45, 1)
+            // MEDIUM：业余爱好者——偶尔小失误，但不会太离谱
+            (0.04, 0.06, 0.55, 2)
         };
 
         let seed = SystemTime::now()
@@ -396,12 +408,14 @@ impl MctsAi {
         };
 
         // 战术底线：避免落子后被对手“一步五连”秒杀
+        // EASY 模式下放松深层威胁检查（新手不会想这么深）
+        let check_high_threat = !self.easy_mode;
         if self.allows_opponent_immediate_win(board, maybe_mistake, mover)
-            || self.allows_opponent_high_threat(board, maybe_mistake, mover)
+            || (check_high_threat && self.allows_opponent_high_threat(board, maybe_mistake, mover))
         {
             for (mv, _) in ranked {
                 if !self.allows_opponent_immediate_win(board, mv, mover)
-                    && !self.allows_opponent_high_threat(board, mv, mover)
+                    && (!check_high_threat || !self.allows_opponent_high_threat(board, mv, mover))
                 {
                     return Some(mv);
                 }
@@ -694,6 +708,23 @@ impl MctsAi {
     // =========================================================================
     // 内部工具
     // =========================================================================
+
+    /// 注意力丢失概率：随棋盘密度增加，新手注意力下降。
+    /// 早局（<12 子）：几乎不遗漏（0%）
+    /// 中盘（12-40 子）：逐渐上升（5%-25%）
+    /// 后期（>40 子）：高概率遗漏（25%-40%）
+    fn attention_miss_prob(&self, board: &Board) -> f64 {
+        let pieces = board.move_count;
+        if pieces < 12 {
+            0.0
+        } else if pieces < 40 {
+            // 12→0.05, 40→0.25 线性插值
+            0.05 + (pieces as f64 - 12.0) / 28.0 * 0.20
+        } else {
+            // 40→0.25, 80→0.40
+            (0.25 + (pieces as f64 - 40.0) / 40.0 * 0.15).min(0.40)
+        }
+    }
 
     fn elapsed_ms(&self) -> u64 {
         self.start_time.elapsed().as_millis() as u64
