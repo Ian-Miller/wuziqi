@@ -655,7 +655,7 @@ impl GomokuAi {
 
             let child_hash = self.zobrist.hash_move(root_hash, row, col, self.config.player);
             let score = -self.minimax(
-                &new_board,
+                &mut new_board,
                 self.config.player.opponent(),
                 depth - 1,
                 -beta,
@@ -813,7 +813,7 @@ impl GomokuAi {
 
     fn minimax(
         &mut self,
-        board: &Board,
+        board: &mut Board,
         player: Color,
         depth: i32,
         mut alpha: i32,
@@ -907,13 +907,13 @@ impl GomokuAi {
                 return alpha;
             }
 
-            let mut new_board = board.clone();
-            if !new_board.place(row, col, player) {
+            if !board.place(row, col, player) {
                 continue;
             }
 
-            if new_board.check_win(row, col, player) {
+            if board.check_win(row, col, player) {
                 let win_score = WIN_SCORE + depth;
+                board.unplace(row, col);
                 tt.set(hash, depth, win_score, Some((row, col)), TtFlag::Exact);
                 return win_score; // 越早胜利分越高
             }
@@ -928,19 +928,22 @@ impl GomokuAi {
             // PVS（Principal Variation Search）
             // 首着全窗口，后续先零窗口探测，必要时再全窗口重搜
             let mut score = if first_move {
-                -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1)
+                -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1)
             } else {
-                let mut s = -self.minimax(&new_board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash, ply + 1);
+                let mut s = -self.minimax(board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash, ply + 1);
                 if s > alpha && s < beta {
-                    s = -self.minimax(&new_board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1);
+                    s = -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1);
                 }
                 s
             };
 
             // 若 LMR 降深后出现潜在改进，再用完整深度复核一次
             if reduce > 0 && score > alpha {
-                score = -self.minimax(&new_board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash, ply + 1);
+                score = -self.minimax(board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash, ply + 1);
             }
+
+            // 回溯撤销
+            board.unplace(row, col);
 
             first_move = false;
 

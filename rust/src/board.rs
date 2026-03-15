@@ -64,6 +64,16 @@ impl Board {
         true
     }
 
+    /// 撤销落子（供搜索回溯使用）
+    pub fn unplace(&mut self, row: usize, col: usize) -> bool {
+        if row >= BOARD_SIZE || col >= BOARD_SIZE || self.cells[row][col] == Color::Empty {
+            return false;
+        }
+        self.cells[row][col] = Color::Empty;
+        self.move_count = self.move_count.saturating_sub(1);
+        true
+    }
+
     /// 检查是否为空
     pub fn is_empty(&self, row: usize, col: usize) -> bool {
         row < BOARD_SIZE && col < BOARD_SIZE && self.cells[row][col] == Color::Empty
