@@ -121,9 +121,9 @@ fun SinglePlayerGameHud(
                         drawRect(
                             brush = Brush.sweepGradient(
                                 listOf(
-                                     Color(0xFFFFC107).copy(alpha = 0.0f),
-                                     Color(0xFFFFC107).copy(alpha = 0.8f),
-                                     Color(0xFFFFC107).copy(alpha = 0.0f),
+                                     Color(0xFF00E5FF).copy(alpha = 0.0f),
+                                     Color(0xFF00E5FF).copy(alpha = 1.0f),
+                                     Color(0xFF00E5FF).copy(alpha = 0.0f),
                                 )
                             ),
                             topLeft = Offset((size.width - maxDim) / 2, (size.height - maxDim) / 2),
