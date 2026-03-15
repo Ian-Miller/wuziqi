@@ -143,6 +143,7 @@ fun QrScannerScreen(
 
 // ── 相机预览 + ML Kit 扫码 ──────────────────────────────────────────────────────
 
+@androidx.camera.core.ExperimentalGetImage
 @Composable
 private fun CameraPreviewWithScanner(onScanned: (String) -> Unit) {
     val context = LocalContext.current
@@ -162,7 +163,7 @@ private fun CameraPreviewWithScanner(onScanned: (String) -> Unit) {
         // suspendCancellableCoroutine 将 ListenableFuture 包装为协程，
         // 避免 addListener 回调在合成阶段同步触发（华为等厂商设备上已实测会导致 NPE）
         val cameraProvider = try {
-            suspendCancellableCoroutine { cont ->
+            suspendCancellableCoroutine<ProcessCameraProvider> { cont ->
                 val future = ProcessCameraProvider.getInstance(context)
                 future.addListener(
                     {

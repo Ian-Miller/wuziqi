@@ -9,6 +9,15 @@
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
 
+# CameraX：保留核心类防止 R8 裁剪
+-keep class androidx.camera.** { *; }
+-dontwarn androidx.camera.**
+
+# ML Kit Barcode：保留扫码相关类
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_barcode.** { *; }
+-dontwarn com.google.mlkit.**
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:

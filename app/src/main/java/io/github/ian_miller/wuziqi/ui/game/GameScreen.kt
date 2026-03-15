@@ -887,7 +887,7 @@ fun ActiveGameScreen(
                             onToggleVibration = { viewModel.setVibrationEnabled(it) },
                             onToggleUndo = { viewModel.setUndoEnabled(it) },
                             onToggleAiAssist = { viewModel.setAiAssistEnabled(it) },
-                            onSetLanguage = menuViewModel?.let { mv -> { mv.setLanguage(it) } },
+                            onSetLanguage = null,
                             onStopGame = if (model.gameStatus == GameStatus.PLAYING) {
                                 { viewModel.stopGame() }
                             } else null,

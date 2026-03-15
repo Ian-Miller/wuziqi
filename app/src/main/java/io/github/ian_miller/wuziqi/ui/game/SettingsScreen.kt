@@ -8,11 +8,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -130,6 +132,39 @@ fun SettingsScreen(
                         checked = uiState.aiAssistEnabled,
                         onCheckedChange = { viewModel.setAiAssistEnabled(it) }
                     )
+                }
+
+                // ── 界面语言 ──────────────────────────────────────────────────
+                SettingsPageCard {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    ) {
+                        Icon(Icons.Filled.Language, contentDescription = null, tint = Color(0xFF5D4037))
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = s.language,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color(0xFF5D4037),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("auto" to s.langAuto, "en" to s.langEnglish, "zh" to s.langChinese).forEach { (code, label) ->
+                            FilterChip(
+                                selected = uiState.language == code,
+                                onClick = { viewModel.setLanguage(code) },
+                                label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = Color(0xFF5D4037),
+                                    selectedLabelColor = Color(0xFFFFE082)
+                                )
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
