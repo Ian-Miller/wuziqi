@@ -249,6 +249,8 @@ pub struct GomokuAi {
     history_scores: [[i32; BOARD_SIZE * BOARD_SIZE]; 2],
     /// 叶子评估缓存（仅用于 depth<=0 的 static eval）
     eval_cache: EvalCache,
+    /// 置换表（跨回合复用，提升中后盘与重复局面命中率）
+    tt: TranspositionTable,
     /// Zobrist 哈希表（固定不变，在构造时初始化）
     zobrist: ZobristTable,
 }
@@ -268,6 +270,7 @@ impl GomokuAi {
             killer_moves: vec![[None, None]; MAX_PLY],
             history_scores: [[0; BOARD_SIZE * BOARD_SIZE]; 2],
             eval_cache: EvalCache::new(),
+            tt: TranspositionTable::new(),
             zobrist: ZobristTable::new(),
         }
     }
@@ -478,9 +481,6 @@ impl GomokuAi {
         // 跟踪上一层耗时（估算下一层用）
         let mut last_layer_ms: u64 = self.last_depth_time_ms.max(1);
 
-        // 每次 take_turn 共享一个置换表（跨迭代深度复用，深层结果对浅层有指导价值）
-        let mut tt = TranspositionTable::new();
-
         // 初始 Zobrist 哈希
         let root_hash = self.zobrist.hash_board(board);
 
@@ -489,7 +489,7 @@ impl GomokuAi {
         if start_depth > 2 && self.time_ok() {
             let t = self.start_time.elapsed().as_millis() as u64;
             let (d_best, done, win, root_score) =
-                self.search_one_depth(board, moves, 2, best_move, &mut tt, root_hash, i32::MIN + 1, i32::MAX - 1);
+                self.search_one_depth(board, moves, 2, best_move, root_hash, i32::MIN + 1, i32::MAX - 1);
             if done {
                 best_move = d_best;
                 self.last_root_score = root_score;
@@ -525,7 +525,7 @@ impl GomokuAi {
             }
 
             let (mut d_best, mut done, mut win, mut root_score) =
-                self.search_one_depth(board, moves, current_depth, best_move, &mut tt, root_hash, alpha0, beta0);
+                self.search_one_depth(board, moves, current_depth, best_move, root_hash, alpha0, beta0);
 
             while done
                 && current_depth >= 4
@@ -538,7 +538,7 @@ impl GomokuAi {
                 alpha0 = self.last_root_score - margin;
                 beta0 = self.last_root_score + margin;
                 let (b2, d2, w2, s2) =
-                    self.search_one_depth(board, moves, current_depth, d_best, &mut tt, root_hash, alpha0, beta0);
+                    self.search_one_depth(board, moves, current_depth, d_best, root_hash, alpha0, beta0);
                 d_best = b2;
                 done = d2;
                 win = w2;
@@ -552,7 +552,7 @@ impl GomokuAi {
                 && self.time_ok()
             {
                 let (b3, d3, w3, s3) =
-                    self.search_one_depth(board, moves, current_depth, d_best, &mut tt, root_hash, i32::MIN + 1, i32::MAX - 1);
+                    self.search_one_depth(board, moves, current_depth, d_best, root_hash, i32::MIN + 1, i32::MAX - 1);
                 d_best = b3;
                 done = d3;
                 win = w3;
@@ -611,7 +611,6 @@ impl GomokuAi {
         moves: &[(usize, usize)],
         depth: i32,
         fallback: (usize, usize),
-        tt: &mut TranspositionTable,
         root_hash: u64,
         mut alpha: i32,
         beta: i32,
@@ -621,7 +620,7 @@ impl GomokuAi {
         let mut found_win = false;
 
         // 将置换表中的最佳走法移到列表首位（走法排序优化）
-        let tt_best = tt.get(root_hash).and_then(|e| e.best_move);
+        let tt_best = self.tt.get(root_hash).and_then(|e| e.best_move);
         let ordered_base: Vec<(usize, usize)> = if let Some(tb) = tt_best {
             let mut v: Vec<(usize, usize)> = moves.iter().copied()
                 .filter(|&m| m != tb)
@@ -661,7 +660,6 @@ impl GomokuAi {
                 depth - 1,
                 -beta,
                 -alpha,
-                tt,
                 child_hash,
                 1,
                 Some((row, col)),
@@ -689,7 +687,7 @@ impl GomokuAi {
 
         // 将本层结果存入置换表
         if !timed_out {
-            tt.set(root_hash, depth, alpha, Some(best), TtFlag::Exact);
+            self.tt.set(root_hash, depth, alpha, Some(best), TtFlag::Exact);
         }
 
         (best, !timed_out, found_win, alpha)
@@ -820,7 +818,6 @@ impl GomokuAi {
         depth: i32,
         mut alpha: i32,
         beta: i32,
-        tt: &mut TranspositionTable,
         hash: u64,
         ply: usize,
         last_move: Option<(usize, usize)>,
@@ -832,7 +829,7 @@ impl GomokuAi {
 
         // ── 置换表查询 ──────────────────────────────────────────────────
         let orig_alpha = alpha;
-        if let Some(entry) = tt.get(hash) {
+        if let Some(entry) = self.tt.get(hash) {
             if entry.depth >= depth {
                 match entry.flag {
                     TtFlag::Exact => return entry.score,
@@ -863,7 +860,7 @@ impl GomokuAi {
                 self.eval_cache.set(eval_key, v);
                 v
             };
-            tt.set(hash, 0, ev, None, TtFlag::Exact);
+            self.tt.set(hash, 0, ev, None, TtFlag::Exact);
             return ev;
         }
 
@@ -874,7 +871,7 @@ impl GomokuAi {
         }
 
         // 置换表最佳走法优先
-        let tt_best_move = tt.get(hash).and_then(|e| e.best_move);
+        let tt_best_move = self.tt.get(hash).and_then(|e| e.best_move);
         let mut moves: Vec<((usize, usize), i32)> = raw
             .into_iter()
             .map(|(r, c)| {
@@ -917,7 +914,7 @@ impl GomokuAi {
             if board.check_win(row, col, player) {
                 let win_score = WIN_SCORE + depth;
                 board.unplace(row, col);
-                tt.set(hash, depth, win_score, Some((row, col)), TtFlag::Exact);
+                self.tt.set(hash, depth, win_score, Some((row, col)), TtFlag::Exact);
                 return win_score; // 越早胜利分越高
             }
 
@@ -931,18 +928,18 @@ impl GomokuAi {
             // PVS（Principal Variation Search）
             // 首着全窗口，后续先零窗口探测，必要时再全窗口重搜
             let mut score = if first_move {
-                -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1, Some((row, col)))
+                -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, child_hash, ply + 1, Some((row, col)))
             } else {
-                let mut s = -self.minimax(board, player.opponent(), search_depth, -alpha - 1, -alpha, tt, child_hash, ply + 1, Some((row, col)));
+                let mut s = -self.minimax(board, player.opponent(), search_depth, -alpha - 1, -alpha, child_hash, ply + 1, Some((row, col)));
                 if s > alpha && s < beta {
-                    s = -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, tt, child_hash, ply + 1, Some((row, col)));
+                    s = -self.minimax(board, player.opponent(), search_depth, -beta, -alpha, child_hash, ply + 1, Some((row, col)));
                 }
                 s
             };
 
             // 若 LMR 降深后出现潜在改进，再用完整深度复核一次
             if reduce > 0 && score > alpha {
-                score = -self.minimax(board, player.opponent(), depth - 1, -beta, -alpha, tt, child_hash, ply + 1, Some((row, col)));
+                score = -self.minimax(board, player.opponent(), depth - 1, -beta, -alpha, child_hash, ply + 1, Some((row, col)));
             }
 
             // 回溯撤销
@@ -958,7 +955,7 @@ impl GomokuAi {
                 self.record_killer(ply, (row, col));
                 self.bump_history(player, row, col, depth);
                 // Beta 剪枝 → 下界（LowerBound）
-                tt.set(hash, depth, alpha, best_move, TtFlag::LowerBound);
+                self.tt.set(hash, depth, alpha, best_move, TtFlag::LowerBound);
                 return alpha;
             }
         }
@@ -969,7 +966,7 @@ impl GomokuAi {
         } else {
             TtFlag::Exact
         };
-        tt.set(hash, depth, alpha, best_move, flag);
+        self.tt.set(hash, depth, alpha, best_move, flag);
 
         alpha
     }
@@ -1296,6 +1293,7 @@ impl GomokuAi {
         self.turn_time_limit_ms = self.config.time_limit_ms;
         self.decay_history();
         self.eval_cache.clear();
+        self.tt.clear();
         // 注意：不重置 last_completed_depth / last_depth_time_ms
         // 这两个字段是跨回合历史，只有创建新 AI 对象时才清零
     }
