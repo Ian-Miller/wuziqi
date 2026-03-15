@@ -24,6 +24,15 @@ const FAST_JUMP_RATIO: u64 = 8;
 /// 剩余时间 >= 上一层耗时 * AFFORD_RATIO 才认为值得继续
 const AFFORD_RATIO: u64 = 3;
 
+/// 战略评估（全局）在 HARD/MASTER 的权重参数
+const HARD_CENTER_W: i32 = 10;
+const HARD_LINK_W: i32 = 8;
+const HARD_MOBILITY_W: i32 = 3;
+
+const MASTER_CENTER_W: i32 = 22;
+const MASTER_LINK_W: i32 = 14;
+const MASTER_MOBILITY_W: i32 = 6;
+
 // ============================================================================
 // 置换表（Transposition Table）
 // ============================================================================
@@ -668,7 +677,71 @@ impl GomokuAi {
                 }
             }
         }
+
+        // HARD / MASTER 增加全局战略评估：
+        // - 中心控制（开中盘布局能力）
+        // - 连通度（蛇形潜伏/连线组织能力）
+        // - 机动性（周边可扩展空间）
+        if self.config.max_depth >= 20 {
+            score += self.strategic_eval(board, player, MASTER_CENTER_W, MASTER_LINK_W, MASTER_MOBILITY_W);
+        } else if self.config.max_depth >= 12 {
+            score += self.strategic_eval(board, player, HARD_CENTER_W, HARD_LINK_W, HARD_MOBILITY_W);
+        }
+
         score
+    }
+
+    fn strategic_eval(
+        &self,
+        board: &Board,
+        player: Color,
+        center_w: i32,
+        link_w: i32,
+        mobility_w: i32,
+    ) -> i32 {
+        let mut total = 0i32;
+
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                let color = board.get(r, c);
+                if color == Color::Empty {
+                    continue;
+                }
+
+                let sign = if color == player { 1 } else { -1 };
+
+                // 1) 中心控制（切比雪夫距离）
+                let dr = (r as i32 - 7).abs();
+                let dc = (c as i32 - 7).abs();
+                let dist = dr.max(dc);
+                let center_bonus = 7 - dist;
+                total += sign * center_bonus * center_w;
+
+                // 2) 连通度 + 3) 机动性（8 邻域）
+                let mut links = 0i32;
+                let mut mobility = 0i32;
+                for rr in (r as i32 - 1)..=(r as i32 + 1) {
+                    for cc in (c as i32 - 1)..=(c as i32 + 1) {
+                        if rr == r as i32 && cc == c as i32 {
+                            continue;
+                        }
+                        if rr < 0 || rr >= BOARD_SIZE as i32 || cc < 0 || cc >= BOARD_SIZE as i32 {
+                            continue;
+                        }
+                        match board.get(rr as usize, cc as usize) {
+                            x if x == color => links += 1,
+                            Color::Empty => mobility += 1,
+                            _ => {}
+                        }
+                    }
+                }
+
+                total += sign * links * link_w;
+                total += sign * mobility * mobility_w;
+            }
+        }
+
+        total
     }
 
     // =========================================================================

@@ -323,7 +323,7 @@ impl MctsAi {
         // 沿 UCB1 最优路径下行，直到找到未完全扩展的节点或叶节点
         let node_ptr = root as *mut MctsNode;
         // SAFETY: 我们在单线程中使用原始指针遍历树，避免借用检查器的嵌套可变借用限制
-        let (leaf, depth_color) = unsafe { self.select(node_ptr, board, root_mover) };
+        let (leaf, depth_color, path) = unsafe { self.select(node_ptr, board, root_mover) };
 
         let value;
 
@@ -368,8 +368,8 @@ impl MctsAi {
         }
 
         // ── Backpropagation ───────────────────────────────────────────────
-        // 从叶节点回溯到根节点，更新访问次数和累计值
-        unsafe { self.backpropagate(node_ptr, leaf, value) };
+        // 使用 selection 路径回传（O(depth)），避免每次从根 DFS 查找叶子（旧实现 O(nodes)）
+        self.backpropagate_path(root, &path, value);
     }
 
     // =========================================================================
@@ -382,15 +382,16 @@ impl MctsAi {
         mut node: *mut MctsNode,
         board: &mut Board,
         root_mover: Color,
-    ) -> (*mut MctsNode, Color) {
+    ) -> (*mut MctsNode, Color, Vec<usize>) {
         let mut current_mover = root_mover;
+        let mut path: Vec<usize> = Vec::new();
 
         loop {
             let n = &mut *node;
 
             // 未完全扩展 → 在此处扩展
             if !n.is_fully_expanded() || n.is_leaf() {
-                return (node, current_mover);
+                return (node, current_mover, path);
             }
 
             // 选择 UCB1 最大的子节点
@@ -414,6 +415,7 @@ impl MctsAi {
                 board.place(r, c_pos, current_mover);
             }
             current_mover = current_mover.opponent();
+            path.push(best_idx);
             node = &mut n.children[best_idx] as *mut MctsNode;
         }
     }
@@ -422,28 +424,21 @@ impl MctsAi {
     // Backpropagation
     // =========================================================================
 
-    /// 从根到叶节点收集路径，然后反向更新
-    /// 简化版：直接在迭代函数里从根到叶更新（每次迭代重新遍历）
-    unsafe fn backpropagate(&self, root: *mut MctsNode, leaf: *mut MctsNode, value: f64) {
-        // 由于树结构中没有父指针，我们从根重新遍历到叶节点路径并沿途更新
-        // 这在节点数较少时性能可接受
-        fn update_path(node: *mut MctsNode, leaf: *mut MctsNode, value: f64) -> bool {
-            let n = unsafe { &mut *node };
-            if std::ptr::eq(node, leaf) {
-                n.visits += 1;
-                n.total_value += value;
-                return true;
+    /// 根据 selection 阶段记录的路径回传（root -> ... -> selected leaf）
+    /// 复杂度 O(depth)，显著降低移动端每迭代开销。
+    fn backpropagate_path(&self, root: &mut MctsNode, path: &[usize], value: f64) {
+        root.visits += 1;
+        root.total_value += value;
+
+        let mut node = root;
+        for &idx in path {
+            if idx >= node.children.len() {
+                break;
             }
-            for child in &mut n.children {
-                if update_path(child as *mut MctsNode, leaf, value) {
-                    n.visits += 1;
-                    n.total_value += value;
-                    return true;
-                }
-            }
-            false
+            node = &mut node.children[idx];
+            node.visits += 1;
+            node.total_value += value;
         }
-        update_path(root, leaf, value);
     }
 
     // =========================================================================
