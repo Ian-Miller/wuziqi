@@ -18,6 +18,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Brush
@@ -91,6 +93,7 @@ fun SinglePlayerGameHud(
     showStartSelection: Boolean = false, // Show "Select Me" state
     playerName: String? = null,
     onSelect: (() -> Unit)? = null, // Select action
+    aiProgress: Float = 0f,
     onPlayVictorySound: (() -> Unit)? = null // New callback
 ) {
     val s = LocalStrings.current
@@ -162,6 +165,7 @@ fun SinglePlayerGameHud(
                         isPlayer = isPlayer, // Use actual player type (AI or Human)
                         isActive = false, 
                         isWinner = false,
+                        progress = 0f,
                         showLabel = false 
                     )
                     
@@ -202,6 +206,7 @@ fun SinglePlayerGameHud(
                         isPlayer = isPlayer,
                         isActive = isActive,
                         isWinner = isWinner,
+                        progress = if (!isPlayer) aiProgress else 0f,
                         showLabel = false 
                     )
                     
@@ -379,6 +384,7 @@ fun PlayerAvatar(
     isPlayer: Boolean,
     isActive: Boolean,
     isWinner: Boolean,
+    progress: Float = 0f,
     showLabel: Boolean = true
 ) {
     val borderColor = if (isWinner) Color.Yellow else if (isActive) MaterialTheme.colorScheme.primary else Color.Transparent
@@ -396,6 +402,50 @@ fun PlayerAvatar(
         label = "Alpha"
     )
     val glowColor = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = alpha) else Color.Transparent
+    val targetProgress = progress.coerceIn(0f, 1f)
+
+    // 软式进度：融合“追踪 + 惯性”，进度上报不均匀时避免卡顿感
+    var displayedProgress by remember { mutableStateOf(0f) }
+    var lastReported by remember { mutableStateOf(0f) }
+    var emaSpeed by remember { mutableStateOf(0f) }
+    val isShowingProgress = !isPlayer && (isActive || targetProgress > 0f)
+
+    LaunchedEffect(isShowingProgress, targetProgress) {
+        if (!isShowingProgress) {
+            displayedProgress = 0f
+            lastReported = 0f
+            emaSpeed = 0f
+            return@LaunchedEffect
+        }
+
+        var lastFrame = 0L
+        while (isShowingProgress) {
+            withFrameNanos { now ->
+                if (lastFrame == 0L) {
+                    lastFrame = now
+                    return@withFrameNanos
+                }
+
+                val dt = ((now - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+                lastFrame = now
+
+                val reportDelta = (targetProgress - lastReported).coerceAtLeast(0f)
+                val observedSpeed = reportDelta / dt
+                emaSpeed = emaSpeed * 0.84f + observedSpeed * 0.16f
+                val predictedSpeed = if (reportDelta < 0.0015f) emaSpeed * 0.92f else emaSpeed
+
+                val catchup = (targetProgress - displayedProgress).coerceAtLeast(0f) * 0.24f
+                val inertia = predictedSpeed * dt * 0.28f
+
+                var next = displayedProgress + catchup + inertia
+                if (targetProgress < 0.999f) {
+                    next = minOf(next, 0.97f)
+                }
+                displayedProgress = next.coerceIn(0f, 1f)
+                lastReported = targetProgress
+            }
+        }
+    }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -407,6 +457,29 @@ fun PlayerAvatar(
                 .padding(8.dp),
             contentAlignment = Alignment.Center
         ) {
+            if (isShowingProgress && displayedProgress > 0f) {
+                androidx.compose.foundation.Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(1.dp)
+                ) {
+                    drawArc(
+                        color = Color(0xFF00E5FF).copy(alpha = 0.32f),
+                        startAngle = -90f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                    drawArc(
+                        color = Color(0xFF00E5FF),
+                        startAngle = -90f,
+                        sweepAngle = 360f * displayedProgress,
+                        useCenter = false,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+            }
+
             Icon(
                 imageVector = if (isPlayer) Icons.Default.Person else Icons.Default.Computer,
                 contentDescription = null,

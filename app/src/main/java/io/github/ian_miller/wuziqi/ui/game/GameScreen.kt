@@ -725,6 +725,7 @@ fun ActiveGameScreen(
                                 gameStatus = model.gameStatus,
                                 rotate180 = false, // HUD is inside a rotated container, so it doesn't need self-rotation
                                 showStartSelection = isSelectionPhase,
+                                aiProgress = if (!isVsHuman) model.aiProgress else 0f,
                                 onSelect = if (isSelectionPhase) {
                                     if (isVsHuman) { { viewModel.startGame(pvpBottomIsBlack = false) } }
                                     else { { viewModel.startGame(aiFirst = true) } }
@@ -830,6 +831,7 @@ fun ActiveGameScreen(
                                 gameStatus = model.gameStatus,
                                 showStartSelection = isSelectionPhase,
                                 playerName = if (bottomIsPlayer) selectedPlayer?.name else null,
+                                aiProgress = 0f,
                                 onSelect = if (isSelectionPhase) {
                                     if (isVsHuman) { { viewModel.startGame(pvpBottomIsBlack = true) } }
                                     else { { viewModel.startGame(aiFirst = false) } }

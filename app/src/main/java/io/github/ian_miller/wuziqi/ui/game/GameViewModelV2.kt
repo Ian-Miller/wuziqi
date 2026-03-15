@@ -224,6 +224,8 @@ class GameViewModelV2 @Inject constructor(
     )
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState
+    private val _aiProgress = MutableStateFlow(0f)
+    val aiProgress: StateFlow<Float> = _aiProgress
 
     // ========================================================================
     // 合并后的 UI 模型（供 Compose 直接使用）
@@ -248,6 +250,7 @@ class GameViewModelV2 @Inject constructor(
         val pvpBottomIsBlack: Boolean,
         // AI
         val isAiThinking: Boolean,
+        val aiProgress: Float,
         val aiHint: Pair<Int, Int>?,
         val isCalculatingHint: Boolean,
         val canUndo: Boolean,
@@ -272,6 +275,7 @@ class GameViewModelV2 @Inject constructor(
                 aiPlayerColor = null,
                 pvpBottomIsBlack = true,
                 isAiThinking = false,
+                aiProgress = 0f,
                 aiHint = null,
                 isCalculatingHint = false,
                 canUndo = false,
@@ -282,8 +286,9 @@ class GameViewModelV2 @Inject constructor(
         }
     }
 
-    val uiModel: StateFlow<UiModel> = _gameState
-        .combine(_uiState) { state, ui -> buildUiModel(state, ui) }
+    val uiModel: StateFlow<UiModel> = combine(_gameState, _uiState, _aiProgress) { state, ui, progress ->
+        buildUiModel(state, ui, progress)
+    }
         .stateIn(viewModelScope, SharingStarted.Eagerly, UiModel.loading())
     
     // ========================================================================
@@ -980,7 +985,7 @@ class GameViewModelV2 @Inject constructor(
     // UiModel 构建（私有）
     // ========================================================================
 
-    private fun buildUiModel(state: State, ui: UiState): UiModel {
+    private fun buildUiModel(state: State, ui: UiState, aiProgressRaw: Float): UiModel {
         val gameStatus = when (state) {
             is State.Initializing -> GameStatus.NOT_STARTED
             is State.Idle -> GameStatus.NOT_STARTED
@@ -1089,6 +1094,11 @@ class GameViewModelV2 @Inject constructor(
             aiPlayerColor = aiPlayerColor,
             pvpBottomIsBlack = pvpBottomIsBlack,
             isAiThinking = state is State.WaitingForAi || state is State.Pausing || state is State.Paused || state is State.Delaying,
+            aiProgress = when (state) {
+                is State.WaitingForAi, is State.Pausing, is State.Paused -> aiProgressRaw.coerceIn(0f, 1f)
+                is State.Delaying -> 0.02f
+                else -> 0f
+            },
             aiHint = aiHint,
             isCalculatingHint = isCalculatingHint,
             canUndo = canUndo,
@@ -1295,24 +1305,32 @@ class GameViewModelV2 @Inject constructor(
 
     private fun launchAiThinking(state: State.WaitingForAi) {
         cancelAiJob()
+        _aiProgress.value = 0f
         val aiColorInt = if (state.aiPlayerColor == PieceColor.BLACK) 1 else 2
         aiJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 val ai = getOrCreateRustAi(state.difficulty, aiColorInt)
                 if (ai == null) {
+                    _aiProgress.value = 0f
                     sendCommand(Cmd.AiCancelled)
                     return@launch
                 }
                 val boardBytes = state.board.toByteArray()
-                val move = ai.takeTurn(boardBytes)
+                val move = ai.takeTurn(boardBytes) { percent ->
+                    val p = (percent.coerceIn(0, 100) / 100f)
+                    _aiProgress.value = maxOf(_aiProgress.value, p)
+                }
                 if (move != null) {
+                    _aiProgress.value = 1f
                     sendCommand(Cmd.AiDone(Piece(move.first, move.second, state.aiPlayerColor)))
                 } else {
                     // AI 被取消（invalidate 后返回 null）——通知状态机清理
+                    _aiProgress.value = 0f
                     sendCommand(Cmd.AiCancelled)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                _aiProgress.value = 0f
                 sendCommand(Cmd.AiCancelled)
             }
         }
@@ -1356,10 +1374,10 @@ class GameViewModelV2 @Inject constructor(
     }
 
     private fun validateAi() { rustAi?.validate() }
-    private fun invalidateAi() { rustAi?.invalidate() }
-    private fun destroyAi() { rustAi?.destroy(); rustAi = null }
+    private fun invalidateAi() { rustAi?.invalidate(); _aiProgress.value = 0f }
+    private fun destroyAi() { rustAi?.destroy(); rustAi = null; _aiProgress.value = 0f }
     private fun invalidateAndDestroyAi() { invalidateAi(); destroyAi() }
-    private fun cancelAiJob() { aiJob?.cancel(); aiJob = null }
+    private fun cancelAiJob() { aiJob?.cancel(); aiJob = null; _aiProgress.value = 0f }
     private fun cancelAssistJob() { assistJob?.cancel(); assistJob = null }
     private fun cancelDelayJob() { delayJob?.cancel(); delayJob = null }
     

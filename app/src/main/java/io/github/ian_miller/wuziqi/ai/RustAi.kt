@@ -17,9 +17,8 @@ class RustAi private constructor(
 ) {
     private var isDestroyed = false
     
-    // 进度回调接口（暂不使用，避免 JNI 开销）
-    interface ProgressListener {
-        fun onProgress(depth: Int, score: Int, nodes: Long)
+    fun interface ProgressCallback {
+        fun onProgress(progressPercent: Int)
     }
     
     companion object {
@@ -82,6 +81,11 @@ class RustAi private constructor(
     private external fun nativeDestroy(ptr: Long)
     private external fun nativeClear(ptr: Long)
     private external fun nativeTakeTurn(ptr: Long, boardData: ByteArray): Int
+    private external fun nativeTakeTurnWithProgress(
+        ptr: Long,
+        boardData: ByteArray,
+        callback: ProgressCallback?
+    ): Int
     private external fun nativeInvalidate(ptr: Long)
     private external fun nativeValidate(ptr: Long)
     
@@ -91,9 +95,20 @@ class RustAi private constructor(
      * @param board 当前棋盘（225字节数组，0=空，1=黑，2=白）
      * @return 走法（row to col），如果取消则返回 null
      */
-    fun takeTurn(board: ByteArray): Pair<Int, Int>? {
+    fun takeTurn(
+        board: ByteArray,
+        onProgress: ((Int) -> Unit)? = null
+    ): Pair<Int, Int>? {
         checkDestroyed()
-        val result = nativeTakeTurn(nativePtr, board)
+        val result = if (onProgress == null) {
+            nativeTakeTurn(nativePtr, board)
+        } else {
+            nativeTakeTurnWithProgress(
+                nativePtr,
+                board,
+                ProgressCallback { p -> onProgress(p.coerceIn(0, 100)) }
+            )
+        }
         return if (result >= 0) result.toPosition() else null
     }
     

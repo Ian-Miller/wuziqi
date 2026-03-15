@@ -21,7 +21,7 @@
 //! - `nativeClear`: 清理状态
 //! - `nativeDestroy`: 销毁实例
 
-use jni::objects::JClass;
+use jni::objects::{JByteArray, JClass, JObject, JValue};
 use jni::sys::{jint, jlong};
 use jni::JNIEnv;
 
@@ -53,6 +53,17 @@ impl AnyAi {
         match self {
             AnyAi::Minimax(ai) => ai.take_turn(board),
             AnyAi::Mcts(ai) => ai.take_turn(board),
+        }
+    }
+
+    fn take_turn_with_progress(
+        &mut self,
+        board: &Board,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+    ) -> Option<(usize, usize)> {
+        match self {
+            AnyAi::Minimax(ai) => ai.take_turn_with_progress(board, on_progress),
+            AnyAi::Mcts(ai) => ai.take_turn_with_progress(board, on_progress),
         }
     }
 
@@ -182,7 +193,7 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTakeTurn(
     env: JNIEnv,
     _class: JClass,
     ptr: jlong,
-    board_data: jni::objects::JByteArray,
+    board_data: JByteArray,
 ) -> jint {
     if ptr == 0 { return -1; }
 
@@ -199,6 +210,59 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTakeTurn(
     };
 
     match ai.take_turn(&board) {
+        Some((row, col)) => (row * 15 + col) as jint,
+        None => -1,
+    }
+}
+
+/// 执行思考（带进度回调）
+/// Java: int nativeTakeTurnWithProgress(long ptr, byte[] boardData, ProgressCallback cb)
+/// 回调签名：cb.onProgress(int percent)
+#[no_mangle]
+pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTakeTurnWithProgress(
+    mut env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+    board_data: JByteArray,
+    callback: JObject,
+) -> jint {
+    if ptr == 0 { return -1; }
+
+    let bytes = match env.convert_byte_array(&board_data) {
+        Ok(b) => b,
+        Err(_) => return -1,
+    };
+    if bytes.len() < 225 { return -1; }
+
+    let board = Board::from_bytes(&bytes);
+    let ai = match unsafe { ai_from_ptr(ptr) } {
+        Some(a) => a,
+        None => return -1,
+    };
+
+    let global_cb = if callback.is_null() {
+        None
+    } else {
+        env.new_global_ref(callback).ok()
+    };
+
+    let mut progress_fn = |percent: i32| {
+        if let Some(ref cb) = global_cb {
+            let _ = env.call_method(
+                cb.as_obj(),
+                "onProgress",
+                "(I)V",
+                &[JValue::Int(percent.clamp(0, 100))],
+            );
+        }
+    };
+    let mut progress_opt: Option<&mut dyn FnMut(i32)> = if global_cb.is_some() {
+        Some(&mut progress_fn)
+    } else {
+        None
+    };
+
+    match ai.take_turn_with_progress(&board, &mut progress_opt) {
         Some((row, col)) => (row * 15 + col) as jint,
         None => -1,
     }

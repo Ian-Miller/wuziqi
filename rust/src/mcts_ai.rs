@@ -37,6 +37,10 @@ pub const MAX_CHILDREN_MEDIUM: usize = 12;
 /// 每隔多少次迭代检查一次时间（should_stop 每次都检查）
 const TIME_CHECK_INTERVAL: u32 = 64;
 
+/// 进度回调节流参数（避免 JNI 高频调用影响算力）
+const PROGRESS_REPORT_INTERVAL_MS: u64 = 100;
+const PROGRESS_MIN_DELTA_PERCENT: i32 = 1;
+
 // ============================================================================
 // 威胁级别：用于 top_k_moves 的启发分加权
 // ============================================================================
@@ -167,6 +171,99 @@ pub struct MctsAi {
 }
 
 impl MctsAi {
+    fn maybe_report_progress(
+        &self,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+        progress_percent: i32,
+        last_report_ms: &mut u64,
+        last_report_percent: &mut i32,
+        force: bool,
+    ) {
+        let p = progress_percent.clamp(0, 100);
+        let now = self.elapsed_ms();
+        let should_emit = force
+            || (*last_report_ms == 0)
+            || (now.saturating_sub(*last_report_ms) >= PROGRESS_REPORT_INTERVAL_MS
+                && (p - *last_report_percent).abs() >= PROGRESS_MIN_DELTA_PERCENT);
+        if should_emit {
+            if let Some(cb) = on_progress.as_deref_mut() {
+                cb(p);
+            }
+            *last_report_ms = now;
+            *last_report_percent = p;
+        }
+    }
+
+    pub fn take_turn_with_progress(
+        &mut self,
+        board: &Board,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+    ) -> Option<(usize, usize)> {
+        // ⚠ 不在此处重置 should_stop：该标志由 Kotlin 端通过 validate()/invalidate() 独占控制。
+        // 在 launchAiThinking 之前，Kotlin 端已调用 validate() 将其设为 false。
+        // 若在此处重置，会导致与 Kotlin invalidate() 的竞态（信号被吃掉）。
+        self.start_time = Instant::now();
+
+        let mut last_report_ms: u64 = 0;
+        let mut last_report_percent: i32 = -1;
+        self.maybe_report_progress(on_progress, 0, &mut last_report_ms, &mut last_report_percent, true);
+
+        // 1. 开局库（前几手立即响应）
+        if let Some(m) = self.opening_book(board) {
+            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+            return Some(m);
+        }
+
+        // 2. 生成候选（后续复用）
+        let all_moves = board.generate_moves();
+        if all_moves.is_empty() {
+            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+            return None;
+        }
+        let mut candidates = top_k_moves(board, self.config.player, self.config.max_children);
+        if self.roll(self.narrow_vision_prob) && candidates.len() > 6 {
+            // 视野收窄：仅保留局部前列候选（模拟新手只看“眼前几手”）
+            candidates.truncate(6);
+        }
+        if candidates.is_empty() {
+            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+            return None;
+        }
+
+        // 3. 深度 1：己方五连 / 对方五连（必须立即响应）
+        if let Some(m) = self.find_immediate_win(board, &candidates) {
+            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+            return Some(m);
+        }
+        // 对方五连：扫全部候选，避免五连点未进 Top-K
+        if let Some(m) = self.find_must_block(board, &all_moves) {
+            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+            return Some(m);
+        }
+
+        // 4. 深度 2：活四级威胁（确定性处理，不交给 MCTS）
+        // 己方可形成活四/双四/三四 → 几乎必胜，直接走
+        if let Some(m) = self.find_forced_win(board, &all_moves) {
+            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+            return Some(m);
+        }
+        // 对方可形成活四/双四/三四 → 必须堵，否则对方下一步必胜
+        if let Some(m) = self.find_critical_block(board, &all_moves) {
+            self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+            return Some(m);
+        }
+
+        // 5. MCTS 主搜索（处理非强制性的复杂局面）
+        let mv = self.mcts_search(
+            board,
+            on_progress,
+            &mut last_report_ms,
+            &mut last_report_percent,
+        );
+        self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+        mv
+    }
+
     pub fn new(config: MctsConfig) -> Self {
         let is_easy = config.exploration_c >= 1.8 || config.max_children >= MAX_CHILDREN_EASY;
         let (mistake_prob, narrow_vision_prob, sample_temperature, sample_top_n) = if is_easy {
@@ -200,58 +297,21 @@ impl MctsAi {
     // =========================================================================
 
     pub fn take_turn(&mut self, board: &Board) -> Option<(usize, usize)> {
-        // ⚠ 不在此处重置 should_stop：该标志由 Kotlin 端通过 validate()/invalidate() 独占控制。
-        // 在 launchAiThinking 之前，Kotlin 端已调用 validate() 将其设为 false。
-        // 若在此处重置，会导致与 Kotlin invalidate() 的竞态（信号被吃掉）。
-        self.start_time = Instant::now();
-
-        // 1. 开局库（前几手立即响应）
-        if let Some(m) = self.opening_book(board) {
-            return Some(m);
-        }
-
-        // 2. 生成候选（后续复用）
-        let all_moves = board.generate_moves();
-        if all_moves.is_empty() {
-            return None;
-        }
-        let mut candidates = top_k_moves(board, self.config.player, self.config.max_children);
-        if self.roll(self.narrow_vision_prob) && candidates.len() > 6 {
-            // 视野收窄：仅保留局部前列候选（模拟新手只看“眼前几手”）
-            candidates.truncate(6);
-        }
-        if candidates.is_empty() {
-            return None;
-        }
-
-        // 3. 深度 1：己方五连 / 对方五连（必须立即响应）
-        if let Some(m) = self.find_immediate_win(board, &candidates) {
-            return Some(m);
-        }
-        // 对方五连：扫全部候选，避免五连点未进 Top-K
-        if let Some(m) = self.find_must_block(board, &all_moves) {
-            return Some(m);
-        }
-
-        // 4. 深度 2：活四级威胁（确定性处理，不交给 MCTS）
-        // 己方可形成活四/双四/三四 → 几乎必胜，直接走
-        if let Some(m) = self.find_forced_win(board, &all_moves) {
-            return Some(m);
-        }
-        // 对方可形成活四/双四/三四 → 必须堵，否则对方下一步必胜
-        if let Some(m) = self.find_critical_block(board, &all_moves) {
-            return Some(m);
-        }
-
-        // 5. MCTS 主搜索（处理非强制性的复杂局面）
-        self.mcts_search(board)
+        let mut none: Option<&mut dyn FnMut(i32)> = None;
+        self.take_turn_with_progress(board, &mut none)
     }
 
     // =========================================================================
     // MCTS 主搜索
     // =========================================================================
 
-    fn mcts_search(&mut self, board: &Board) -> Option<(usize, usize)> {
+    fn mcts_search(
+        &mut self,
+        board: &Board,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+        last_report_ms: &mut u64,
+        last_report_percent: &mut i32,
+    ) -> Option<(usize, usize)> {
         let mover = self.config.player;
         let mut root = MctsNode::root(board, mover, self.config.max_children);
         let mut iter_count: u32 = 0;
@@ -267,6 +327,16 @@ impl MctsAi {
             {
                 break;
             }
+
+            let t_progress = ((self.elapsed_ms() as f64 / self.config.time_limit_ms.max(1) as f64) * 97.0)
+                .round() as i32;
+            self.maybe_report_progress(
+                on_progress,
+                t_progress.clamp(0, 97),
+                last_report_ms,
+                last_report_percent,
+                false,
+            );
             iter_count += 1;
 
             // 每次迭代：Selection → Expansion → Evaluation → Backpropagation
