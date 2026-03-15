@@ -24,6 +24,11 @@ const FAST_JUMP_RATIO: u64 = 8;
 /// 剩余时间 >= 上一层耗时 * AFFORD_RATIO 才认为值得继续
 const AFFORD_RATIO: u64 = 3;
 
+/// 根节点 Aspiration Window 参数
+const ASPIRATION_MARGIN_BASE: i32 = 1_200;
+const ASPIRATION_MARGIN_STEP: i32 = 2_000;
+const ASPIRATION_RETRY_MAX: i32 = 2;
+
 // ============================================================================
 // 置换表（Transposition Table）
 // ============================================================================
@@ -175,6 +180,8 @@ pub struct GomokuAi {
     last_completed_depth: i32,
     /// 跨回合历史：上一次最后一层搜索的耗时 ms（用于估算下一层时间）
     last_depth_time_ms: u64,
+    /// 跨回合历史：上一次根节点评估分（用于 aspiration window）
+    last_root_score: i32,
     /// Zobrist 哈希表（固定不变，在构造时初始化）
     zobrist: ZobristTable,
 }
@@ -188,6 +195,7 @@ impl GomokuAi {
             start_time: Instant::now(),
             last_completed_depth: 0,
             last_depth_time_ms: 0,
+            last_root_score: 0,
             zobrist: ZobristTable::new(),
         }
     }
@@ -388,9 +396,11 @@ impl GomokuAi {
         // 若起始深度 > 2，先在深度 2 做一次快速搜索作为安全回退。
         if start_depth > 2 && self.time_ok() {
             let t = self.start_time.elapsed().as_millis() as u64;
-            let (d_best, done, win) = self.search_one_depth(board, moves, 2, best_move, &mut tt, root_hash);
+            let (d_best, done, win, root_score) =
+                self.search_one_depth(board, moves, 2, best_move, &mut tt, root_hash, i32::MIN + 1, i32::MAX - 1);
             if done {
                 best_move = d_best;
+                self.last_root_score = root_score;
                 last_layer_ms = (self.start_time.elapsed().as_millis() as u64 - t).max(1);
                 if win {
                     return best_move;
@@ -411,12 +421,57 @@ impl GomokuAi {
             }
 
             let t = self.start_time.elapsed().as_millis() as u64;
-            let (d_best, done, win) =
-                self.search_one_depth(board, moves, current_depth, best_move, &mut tt, root_hash);
+
+            // Aspiration Window：围绕上一层分数做窄窗口搜索，失败再扩窗
+            let mut attempt = 0;
+            let mut margin = ASPIRATION_MARGIN_BASE;
+            let mut alpha0 = i32::MIN + 1;
+            let mut beta0 = i32::MAX - 1;
+            if current_depth >= 4 {
+                alpha0 = self.last_root_score - margin;
+                beta0 = self.last_root_score + margin;
+            }
+
+            let (mut d_best, mut done, mut win, mut root_score) =
+                self.search_one_depth(board, moves, current_depth, best_move, &mut tt, root_hash, alpha0, beta0);
+
+            while done
+                && current_depth >= 4
+                && attempt < ASPIRATION_RETRY_MAX
+                && (root_score <= alpha0 || root_score >= beta0)
+                && self.time_ok()
+            {
+                attempt += 1;
+                margin += ASPIRATION_MARGIN_STEP;
+                alpha0 = self.last_root_score - margin;
+                beta0 = self.last_root_score + margin;
+                let (b2, d2, w2, s2) =
+                    self.search_one_depth(board, moves, current_depth, d_best, &mut tt, root_hash, alpha0, beta0);
+                d_best = b2;
+                done = d2;
+                win = w2;
+                root_score = s2;
+            }
+
+            // 仍失败则退回全窗口，保证正确性
+            if done
+                && current_depth >= 4
+                && (root_score <= alpha0 || root_score >= beta0)
+                && self.time_ok()
+            {
+                let (b3, d3, w3, s3) =
+                    self.search_one_depth(board, moves, current_depth, d_best, &mut tt, root_hash, i32::MIN + 1, i32::MAX - 1);
+                d_best = b3;
+                done = d3;
+                win = w3;
+                root_score = s3;
+            }
+
             let elapsed_ms = (self.start_time.elapsed().as_millis() as u64 - t).max(1);
 
             if done {
                 best_move = d_best;
+                self.last_root_score = root_score;
                 last_layer_ms = elapsed_ms;
                 self.last_completed_depth = current_depth;
                 self.last_depth_time_ms = elapsed_ms;
@@ -464,10 +519,10 @@ impl GomokuAi {
         fallback: (usize, usize),
         tt: &mut TranspositionTable,
         root_hash: u64,
-    ) -> ((usize, usize), bool, bool) {
+        mut alpha: i32,
+        beta: i32,
+    ) -> ((usize, usize), bool, bool, i32) {
         let mut best = fallback;
-        let mut alpha = i32::MIN + 1;
-        let beta = i32::MAX - 1;
         let mut timed_out = false;
         let mut found_win = false;
 
@@ -495,7 +550,7 @@ impl GomokuAi {
             }
 
             if new_board.check_win(row, col, self.config.player) {
-                return ((row, col), true, true);
+                return ((row, col), true, true, WIN_SCORE + depth);
             }
 
             let child_hash = self.zobrist.hash_move(root_hash, row, col, self.config.player);
@@ -525,7 +580,7 @@ impl GomokuAi {
             tt.set(root_hash, depth, alpha, Some(best), TtFlag::Exact);
         }
 
-        (best, !timed_out, found_win)
+        (best, !timed_out, found_win, alpha)
     }
 
     // =========================================================================
