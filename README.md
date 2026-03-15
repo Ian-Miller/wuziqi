@@ -67,35 +67,6 @@ cd rust
 | `cargo install cargo-ndk` | `cargo install cargo-ndk` |
 | `cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release` | `cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release` |
 
----
-
-## Gradle Wrapper：GitHub 显示官方地址，但本机保持本地包
-
-仓库内建议保持官方地址（便于 CI 与协作者）：
-
-- [gradle/wrapper/gradle-wrapper.properties](gradle/wrapper/gradle-wrapper.properties)
-
-本机若想继续使用本地 `file:///...` 分发包，可用下面方式（不影响 GitHub 显示）：
-
-1. 先让该文件跟踪官方地址（已在仓库中完成）。
-2. 本地执行（仅本机生效）：
-
-```bash
-git update-index --skip-worktree gradle/wrapper/gradle-wrapper.properties
-```
-
-3. 然后把本机该文件改回你的本地地址，例如：
-
-```properties
-distributionUrl=file:///D:/gradle/gradle-9.1.0-bin.zip
-```
-
-恢复跟踪时执行：
-
-```bash
-git update-index --no-skip-worktree gradle/wrapper/gradle-wrapper.properties
-```
-
 ### 编译 APK
 
 ```bash

@@ -304,10 +304,10 @@ impl MctsAi {
         let is_easy = config.exploration_c >= 1.8 || config.max_children >= MAX_CHILDREN_EASY;
         let (mistake_prob, narrow_vision_prob, sample_temperature, sample_top_n) = if is_easy {
             // EASY：更像新手，允许更多“看走眼”和随机性
-            (0.18, 0.22, 1.25, 4)
+            (0.10, 0.12, 0.95, 3)
         } else {
             // MEDIUM：爱好者，偶发失误但整体稳健
-            (0.06, 0.08, 0.70, 3)
+            (0.0, 0.0, 0.45, 1)
         };
 
         let seed = SystemTime::now()
@@ -375,13 +375,18 @@ impl MctsAi {
             return None;
         }
 
-        // MEDIUM/EASY 人类化：在前 N 候选中按温度抽样（不是永远第一）
-        let top_n = self.sample_top_n.min(ranked.len());
-        let chosen = self.sample_softmax(&ranked[..top_n], self.sample_temperature)
-            .unwrap_or(ranked[0].0);
+        // MEDIUM：确定性优先（稳定、不乱下）
+        // EASY：在前 N 候选中按温度抽样（保留一定“人味”）
+        let chosen = if self.easy_mode {
+            let top_n = self.sample_top_n.min(ranked.len());
+            self.sample_softmax(&ranked[..top_n], self.sample_temperature)
+                .unwrap_or(ranked[0].0)
+        } else {
+            ranked[0].0
+        };
 
         // 失误模式：偶发放弃最佳走法（但尽量不犯“立即送杀”）
-        let maybe_mistake = if self.roll(self.mistake_prob) && ranked.len() >= 2 {
+        let maybe_mistake = if self.easy_mode && self.roll(self.mistake_prob) && ranked.len() >= 2 {
             let alt_pool = ranked.iter().skip(1).take(4).copied().collect::<Vec<_>>();
             if let Some(alt) = self.sample_softmax(&alt_pool, self.sample_temperature + 0.45) {
                 alt
@@ -393,9 +398,13 @@ impl MctsAi {
         };
 
         // 战术底线：避免落子后被对手“一步五连”秒杀
-        if self.allows_opponent_immediate_win(board, maybe_mistake, mover) {
+        if self.allows_opponent_immediate_win(board, maybe_mistake, mover)
+            || self.allows_opponent_high_threat(board, maybe_mistake, mover)
+        {
             for (mv, _) in ranked {
-                if !self.allows_opponent_immediate_win(board, mv, mover) {
+                if !self.allows_opponent_immediate_win(board, mv, mover)
+                    && !self.allows_opponent_high_threat(board, mv, mover)
+                {
                     return Some(mv);
                 }
             }
@@ -840,6 +849,25 @@ impl MctsAi {
                     debug_assert!(b.unplace(mv.0, mv.1));
                     return true;
                 }
+            }
+        }
+        debug_assert!(b.unplace(mv.0, mv.1));
+        false
+    }
+
+    /// 判断该走法是否会让对手在下一手获得高危强制威胁（活四/双四/三四）
+    fn allows_opponent_high_threat(&self, board: &Board, mv: (usize, usize), mover: Color) -> bool {
+        let mut b = board.clone();
+        if !b.place(mv.0, mv.1, mover) {
+            return true;
+        }
+        let opp = mover.opponent();
+        let next_moves = b.generate_moves();
+        for (r, c) in next_moves {
+            let s = evaluate_position(&b, r, c, opp);
+            if s >= SCORE_FOUR {
+                debug_assert!(b.unplace(mv.0, mv.1));
+                return true;
             }
         }
         debug_assert!(b.unplace(mv.0, mv.1));

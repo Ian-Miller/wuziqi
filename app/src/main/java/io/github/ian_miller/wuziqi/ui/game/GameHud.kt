@@ -390,6 +390,7 @@ fun PlayerAvatar(
     val borderColor = if (isWinner) Color.Yellow else if (isActive) MaterialTheme.colorScheme.primary else Color.Transparent
     val borderWidth = if (isActive || isWinner) 3.dp else 0.dp
     val avatarBgColor = if (isBlack) Color.Black else Color.White
+    val progressColor = Color(0xFF00E5FF)
     
     // 呼吸动画
     val transition = rememberInfiniteTransition(label = "ActiveGlow")
@@ -458,29 +459,34 @@ fun PlayerAvatar(
                     val stroke = borderWidth.toPx()
                     if (stroke <= 0f || borderColor == Color.Transparent) return@drawWithContent
 
-                    // 统一边框底色
-                    drawArc(
-                        color = borderColor.copy(alpha = if (isShowingProgress) 0.22f else 1f),
-                        startAngle = -90f,
-                        sweepAngle = 360f,
-                        useCenter = false,
-                        style = Stroke(width = stroke, cap = StrokeCap.Round)
-                    )
-
                     if (isShowingProgress) {
                         val doneSweep = 360f * displayedProgress.coerceIn(0f, 1f)
-                        val missingSweep = (360f - doneSweep).coerceIn(0f, 360f)
-
-                        // 用“缺口”表达剩余进度：缺口越小，越接近完成
-                        if (missingSweep > 0.8f) {
+                        // 先画底轨（高对比但半透明），再画完成段
+                        drawArc(
+                            color = progressColor.copy(alpha = 0.34f),
+                            startAngle = -90f,
+                            sweepAngle = 360f,
+                            useCenter = false,
+                            style = Stroke(width = stroke, cap = StrokeCap.Round)
+                        )
+                        if (doneSweep > 0.8f) {
                             drawArc(
-                                color = avatarBgColor,
-                                startAngle = -90f + doneSweep,
-                                sweepAngle = missingSweep,
+                                color = progressColor,
+                                startAngle = -90f,
+                                sweepAngle = doneSweep,
                                 useCenter = false,
-                                style = Stroke(width = stroke + 0.6.dp.toPx(), cap = StrokeCap.Round)
+                                style = Stroke(width = stroke, cap = StrokeCap.Round)
                             )
                         }
+                    } else {
+                        // 非进度态保持原有清晰边框
+                        drawArc(
+                            color = borderColor,
+                            startAngle = -90f,
+                            sweepAngle = 360f,
+                            useCenter = false,
+                            style = Stroke(width = stroke, cap = StrokeCap.Round)
+                        )
                     }
                 }
                 .background(avatarBgColor, CircleShape)
