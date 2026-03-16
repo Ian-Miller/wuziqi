@@ -398,7 +398,7 @@ class RemoteViewModel @Inject constructor(
         if (LanInviteCode.isLanCode(code)) {
             joinRoomLan(code)
         } else {
-            if (_state.value.nostrAvailable == false || isRelayBlockedPermanently()) {
+            if (_state.value.nostrAvailable == false) {
                 _state.update { it.copy(phase = RemotePhase.Error("", RemoteErrorType.RELAY_UNAVAILABLE)) }
                 return
             }

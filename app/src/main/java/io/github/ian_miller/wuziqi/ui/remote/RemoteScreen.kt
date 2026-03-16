@@ -92,6 +92,7 @@ fun RemoteLobbyScreen(
                         relayTotal = relayStatus.size.coerceAtLeast(3),
                         hasActiveGame = gameState != null && !gameState!!.isGameOver,
                         onCreateRoom = viewModel::createRoom,
+                        onRetryRelay = viewModel::retryRelayConnection,
                         onCreateRoomLan = viewModel::createRoomLan,
                         onJoinRoom = {
                             viewModel.startJoining()
@@ -197,6 +198,7 @@ private fun RemoteLobbyContent(
     relayTotal: Int,
     hasActiveGame: Boolean,
     onCreateRoom: () -> Unit,
+    onRetryRelay: () -> Unit,
     onCreateRoomLan: () -> Unit,
     onJoinRoom: () -> Unit,
     onResumeGame: () -> Unit,
@@ -297,7 +299,7 @@ private fun RemoteLobbyContent(
 
                 // Nostr 网络创建
                 Button(
-                    onClick = onCreateRoom,
+                    onClick = if (nostrAvailable == false) onRetryRelay else onCreateRoom,
                     modifier = Modifier
                         .fillMaxWidth()
                         .sizeIn(minHeight = 56.dp),
