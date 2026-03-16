@@ -63,7 +63,7 @@ class GameViewModelV2 @Inject constructor(
         val soundEnabled: Boolean = true,
         val vibrationEnabled: Boolean = true,
         val undoEnabled: Boolean = true,
-        val aiAssistEnabled: Boolean = false
+        val aiAssistEnabled: Boolean = true
     )
     
     // ========================================================================
@@ -899,7 +899,7 @@ class GameViewModelV2 @Inject constructor(
             soundEnabled = prefs.getBoolean("sound_enabled", true),
             vibrationEnabled = prefs.getBoolean("vibration_enabled", true),
             undoEnabled = prefs.getBoolean("undo_enabled", true),
-            aiAssistEnabled = prefs.getBoolean("ai_assist_enabled", false)
+            aiAssistEnabled = prefs.getBoolean("ai_assist_enabled", true)
         )
         
         val difficulty = try {

@@ -7,7 +7,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -102,7 +101,6 @@ fun GameControlsRow(
     lastMoveExists: Boolean,
     isAiThinking: Boolean,
     onUndo: () -> Unit,
-    onStop: () -> Unit,
     onAssist: () -> Unit,
     onMenu: (() -> Unit)?,
     onStartAiFirst: (() -> Unit)? = null,
@@ -178,20 +176,6 @@ fun GameControlsRow(
                      Spacer(Modifier.width(8.dp))
                      Text(s.undo, maxLines = 1)
                  }
-             }
-        }
-             
-        // Stop (PvE Only)
-        AnimatedControlItem(
-             visible = gameStatus == GameStatus.PLAYING && !isVsHuman
-        ) {
-             GlassyButton(
-                onClick = onStop,
-                containerColor = MaterialTheme.colorScheme.errorContainer
-             ) {
-                 Icon(Icons.Filled.Stop, null)
-                 Spacer(Modifier.width(8.dp))
-                 Text(s.stop, maxLines = 1)
              }
         }
              

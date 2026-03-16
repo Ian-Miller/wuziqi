@@ -747,7 +747,6 @@ fun ActiveGameScreen(
                                 lastMoveExists = model.lastMove != null,
                                 isAiThinking = model.isAiThinking,
                                 onUndo = { viewModel.undo() },
-                                onStop = { viewModel.stopGame() },
                                 onAssist = { viewModel.onShowAssistHint() },
                                 onMenu = null // Menu only at bottom per user request
                             )
@@ -853,7 +852,6 @@ fun ActiveGameScreen(
                                 lastMoveExists = model.lastMove != null,
                                 isAiThinking = model.isAiThinking,
                                 onUndo = { viewModel.undo() },
-                                onStop = { viewModel.stopGame() },
                                 onAssist = { viewModel.onShowAssistHint() },
                                 onMenu = { viewModel.showSettings() },
                                 onStartAiFirst = null,
