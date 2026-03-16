@@ -195,12 +195,17 @@ pub fn match_pattern_score((count, empty, left_blocked, right_blocked): (i32, i3
         (4, _, _) => SCORE_BLOCKED_FOUR, // 其他四子
 
         // 三子情况
-        (2, 5, 0) => SCORE_THREE,         // 活三
-        (2, 4, 1) => SCORE_BLOCKED_THREE, // 眠三
+        // 注：count=2 意味着已有2颗同色子紧靠落子点，加上落子点本身共3颗。
+        // empty=5 是宽松窗口（两侧都有足够空间）；empty=4,blocked=0 是紧凑窗口
+        // 但两端均未被对手或边界封堵，同样构成活三（可向两端延伸至五连）。
+        (2, 5, 0) => SCORE_THREE,         // 活三（宽窗口）
+        (2, 4, 0) => SCORE_THREE,         // 活三（紧凑窗口，两端均开放）
+        (2, 4, 1) => SCORE_BLOCKED_THREE, // 眠三（一端封堵）
         (3, _, _) => SCORE_BLOCKED_THREE, // 其他三子
 
         // 两子情况
         (1, 5, 0) => SCORE_TWO,         // 活二
+        (1, 4, 0) => SCORE_TWO,         // 活二（紧凑窗口，两端均开放）
         (1, 4, 1) => SCORE_BLOCKED_TWO, // 眠二
         (2, _, _) => SCORE_BLOCKED_TWO, // 其他两子
 
