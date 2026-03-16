@@ -762,7 +762,10 @@ class GameViewModelV2 @Inject constructor(
                     moveHistory = newHistory,
                     // 撤销后轮到被撤销棋子的颜色：newHistory.size 为偶数→黑棋（先手），奇数→白棋
                     currentPlayer = if (newHistory.size % 2 == 0) PieceColor.BLACK else PieceColor.WHITE,
-                    lastMove = lastPiece
+                    lastMove = lastPiece,
+                    // 清除旧提示，避免撤销后残留上一步的提示
+                    aiHint = null,
+                    isCalculatingHint = false
                 )
             }
         }
@@ -1534,7 +1537,9 @@ class GameViewModelV2 @Inject constructor(
                 ) ?: return@launch
                 val move = ai.takeTurn(boardSnapshot)
                 ai.destroy()
-                if (move != null) {
+                // isActive 检查：若 assistJob 在 JNI 计算期间被 cancel（阻塞调用无法中断），
+                // 此处拦截，避免将过期局面的提示发送给 actor。
+                if (move != null && isActive) {
                     sendCommand(Cmd.AssistReady(move))
                 }
             } catch (e: Exception) {
