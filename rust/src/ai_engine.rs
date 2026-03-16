@@ -4,7 +4,7 @@ use std::time::Instant;
 use std::collections::VecDeque;
 
 use crate::board::{Board, Color, BOARD_SIZE};
-use crate::evaluator::{evaluate_position, SCORE_BLOCKED_FOUR, SCORE_THREE};
+use crate::evaluator::{evaluate_position, SCORE_BLOCKED_FOUR, SCORE_FOUR, SCORE_THREE};
 
 /// 胜利分数（五连或搜索路径内的强制赢棋）
 const WIN_SCORE: i32 = 1_000_000;
@@ -356,6 +356,19 @@ impl GomokuAi {
             return Some(m);
         }
 
+        // 3.5 HARD / MASTER：活四 / 双四 / 三四等关键威胁快速检查
+        // 这些是“下一手几乎必胜”的战术点，不应完全交给深搜慢慢发现。
+        if self.config.max_depth >= 12 {
+            if let Some(m) = self.find_forced_win(board, &moves) {
+                self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                return Some(m);
+            }
+            if let Some(m) = self.find_critical_block(board, &moves) {
+                self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                return Some(m);
+            }
+        }
+
         // 4. 迭代加深搜索（含智能深度选择 + 杀棋检测）
         let mv = self.iterative_deepening(
             board,
@@ -471,8 +484,8 @@ impl GomokuAi {
         // 进攻分全值 + 防御分 9/10（轻微偏向进攻）
         let mut score = my + opp * 9 / 10;
 
-        // MASTER 专属：轻量两步计划加权（不做完整前瞻，仅用于走法排序）
-        if self.config.max_depth >= 20 {
+        // HARD / MASTER：轻量两步计划加权（不做完整前瞻，仅用于走法排序）
+        if self.config.max_depth >= 12 {
             score += self.master_plan_bonus(board, row, col);
         }
 
@@ -522,7 +535,27 @@ impl GomokuAi {
             }
         }
 
-        high_threat_count * 4_000 + mid_threat_count * 900 + best_follow / 10
+        // 3) 对方后手威胁评估：若落子后对方能形成双三（≥5000）以上的复合威胁，
+        //    说明当前走法让对方获得了战略主动，适度降权。
+        //    这是捕获"进攻但忽视对方活三"的关键修正。
+        let mut opp_best_threat = 0i32;
+        for (idx, &(r, c)) in next.iter().enumerate() {
+            if idx >= 16 {
+                break;
+            }
+            let s = evaluate_position(&b, r, c, opp);
+            if s > opp_best_threat {
+                opp_best_threat = s;
+            }
+        }
+        // 双三（≈5000）以上才惩罚；单活三（1000）属正常局面，交给深搜处理
+        let threat_penalty = if opp_best_threat >= SCORE_BLOCKED_FOUR * 4 {
+            opp_best_threat / 4
+        } else {
+            0
+        };
+
+        high_threat_count * 4_000 + mid_threat_count * 900 + best_follow / 10 - threat_penalty
     }
 
     // =========================================================================
@@ -560,6 +593,55 @@ impl GomokuAi {
             }
         }
         None
+    }
+
+    /// 检查己方是否存在“下一手几乎必胜”的强制进攻点：
+    /// 活四、双四、三四等组合威胁。
+    ///
+    /// 优先使用严格四连检测，避免把外侧假点误判为真正杀点。
+    fn find_forced_win(&self, board: &Board, moves: &[(usize, usize)]) -> Option<(usize, usize)> {
+        let player = self.config.player;
+        let best_real = moves
+            .iter()
+            .filter(|&&(r, c)| is_real_four_threat(board, r, c, player))
+            .max_by_key(|&&(r, c)| evaluate_position(board, r, c, player))
+            .copied();
+        if best_real.is_some() {
+            return best_real;
+        }
+
+        moves
+            .iter()
+            .filter_map(|&(r, c)| {
+                let s = evaluate_position(board, r, c, player);
+                if s >= SCORE_FOUR { Some(((r, c), s)) } else { None }
+            })
+            .max_by_key(|&(_, s)| s)
+            .map(|((r, c), _)| (r, c))
+    }
+
+    /// 检查对手是否存在“下一手几乎必胜”的关键威胁，若存在则抢先堵住。
+    ///
+    /// 同样优先使用严格四连检测，避免堵到真正杀点外侧一格。
+    fn find_critical_block(&self, board: &Board, moves: &[(usize, usize)]) -> Option<(usize, usize)> {
+        let opp = self.config.player.opponent();
+        let best_real = moves
+            .iter()
+            .filter(|&&(r, c)| is_real_four_threat(board, r, c, opp))
+            .max_by_key(|&&(r, c)| evaluate_position(board, r, c, opp))
+            .copied();
+        if best_real.is_some() {
+            return best_real;
+        }
+
+        moves
+            .iter()
+            .filter_map(|&(r, c)| {
+                let s = evaluate_position(board, r, c, opp);
+                if s >= SCORE_FOUR { Some(((r, c), s)) } else { None }
+            })
+            .max_by_key(|&(_, s)| s)
+            .map(|((r, c), _)| (r, c))
     }
 
     // =========================================================================
@@ -801,8 +883,8 @@ impl GomokuAi {
             moves.to_vec()
         };
 
-        // MASTER：抑制前排候选过于同质（同一小区域扎堆）
-        let ordered: Vec<(usize, usize)> = if self.config.max_depth >= 20 {
+        // HARD / MASTER：抑制前排候选过于同质（同一小区域扎堆），保证搜索多样性
+        let ordered: Vec<(usize, usize)> = if self.config.max_depth >= 12 {
             self.suppress_root_redundancy(&ordered_base)
         } else {
             ordered_base
@@ -838,8 +920,8 @@ impl GomokuAi {
                 last_report_percent,
             );
 
-            // 根节点重复局面惩罚（主要改善撤销/重试时“机械复读同一步”）
-            let adjusted_score = if self.config.max_depth >= 20 {
+            // 根节点重复局面惩罚（HARD / MASTER：改善撤销/重试时“机械复读同一步”）
+            let adjusted_score = if self.config.max_depth >= 12 {
                 let penalty = self.root_repetition_penalty(root_hash, (row, col));
                 // 若是明确杀棋分，不做惩罚，避免错失战术手
                 if score >= KILL_THRESHOLD { score } else { score - penalty }
@@ -1285,12 +1367,13 @@ impl GomokuAi {
                 (14, 12, 10, 26)
             }
         } else {
+            // HARD 使用与 MASTER 相同的战略权重；难度差异来自搜索深度与时间预算
             if move_count <= 12 {
-                (14, 10, 3, 10)
+                (30, 18, 4, 16)
             } else if move_count <= 50 {
-                (11, 9, 5, 12)
+                (22, 14, 7, 20)
             } else {
-                (8, 8, 8, 16)
+                (14, 12, 10, 26)
             }
         }
     }
@@ -1530,4 +1613,44 @@ impl GomokuAi {
     pub fn co_validate(&self) -> bool {
         self.should_continue()
     }
+}
+
+/// 严格四连威胁检测：在 (row, col) 落子（颜色 color）后，
+/// 检查是否形成「真实四连」—— 不允许跳格，且至少一端开放。
+///
+/// 作用：排除 `_ _ X X X _` 这类“外侧一格”和真正堵点同分的假阳性。
+fn is_real_four_threat(board: &Board, row: usize, col: usize, color: Color) -> bool {
+    let dirs = [(0i32, 1i32), (1, 0), (1, 1), (1, -1)];
+    for &(dr, dc) in &dirs {
+        let mut count = 1i32;
+
+        let (mut r, mut c) = (row as i32 + dr, col as i32 + dc);
+        while r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32
+            && board.get(r as usize, c as usize) == color
+        {
+            count += 1;
+            r += dr;
+            c += dc;
+        }
+        let right_open = r >= 0 && r < BOARD_SIZE as i32
+            && c >= 0 && c < BOARD_SIZE as i32
+            && board.get(r as usize, c as usize) == Color::Empty;
+
+        let (mut r, mut c) = (row as i32 - dr, col as i32 - dc);
+        while r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32
+            && board.get(r as usize, c as usize) == color
+        {
+            count += 1;
+            r -= dr;
+            c -= dc;
+        }
+        let left_open = r >= 0 && r < BOARD_SIZE as i32
+            && c >= 0 && c < BOARD_SIZE as i32
+            && board.get(r as usize, c as usize) == Color::Empty;
+
+        if count >= 4 && (left_open || right_open) {
+            return true;
+        }
+    }
+    false
 }
