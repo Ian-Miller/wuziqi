@@ -403,15 +403,24 @@ fun PlayerAvatar(
         ),
         label = "Alpha"
     )
-    val glowColor = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = alpha) else Color.Transparent
     val targetProgress = progress.coerceIn(0f, 1f)
     val isShowingProgress = !isPlayer && (isActive || targetProgress > 0f)
+    val glowColor = if (isActive && !isShowingProgress) {
+        MaterialTheme.colorScheme.primary.copy(alpha = alpha)
+    } else {
+        Color.Transparent
+    }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
                 .size(42.dp)
-                .shadow(elevation = if(isActive) 8.dp else 0.dp, shape = CircleShape, ambientColor = glowColor, spotColor = glowColor)
+                .shadow(
+                    elevation = if (isActive && !isShowingProgress) 8.dp else 0.dp,
+                    shape = CircleShape,
+                    ambientColor = glowColor,
+                    spotColor = glowColor
+                )
                 .drawWithContent {
                     drawContent()
                     val stroke = borderWidth.toPx()
