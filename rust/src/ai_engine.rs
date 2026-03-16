@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::collections::VecDeque;
@@ -16,9 +16,9 @@ const KILL_THRESHOLD: i32 = WIN_SCORE / 2;
 const TIME_CHECK_FREQ: u64 = 256;
 
 /// 进度回调节流参数（避免 JNI 高频调用影响算力）
-const PROGRESS_REPORT_INTERVAL_MS: u64 = 100;
+const PROGRESS_REPORT_INTERVAL_MS: u64 = 50;
 const PROGRESS_MIN_DELTA_PERCENT: i32 = 1;
-const PROGRESS_NODE_CHECK_FREQ: u64 = 2048;
+const PROGRESS_NODE_CHECK_FREQ: u64 = 512;
 
 /// 开局中心点
 const OPENING_CENTER: (usize, usize) = (7, 7);
@@ -258,6 +258,9 @@ pub struct GomokuAi {
     tt: TranspositionTable,
     /// Zobrist 哈希表（固定不变，在构造时初始化）
     zobrist: ZobristTable,
+    /// 当前最优走法（实时预览用）。
+    /// 存储 row*15+col；-1 表示尚未确定。搜索线程写，Kotlin 线程读。
+    pub best_move_encoded: Arc<AtomicI32>,
 }
 
 impl GomokuAi {
@@ -381,6 +384,7 @@ impl GomokuAi {
             eval_cache: EvalCache::new(),
             tt: TranspositionTable::new(),
             zobrist: ZobristTable::new(),
+            best_move_encoded: Arc::new(AtomicI32::new(-1)),
         }
     }
 
@@ -701,11 +705,15 @@ impl GomokuAi {
                 root_score = s3;
             }
 
-            let elapsed_ms = (self.start_time.elapsed().as_millis() as u64 - t).max(1);
-
             if done {
                 best_move = d_best;
+                // 更新实时最优走法（供 Kotlin 端轮询预览）
+                self.best_move_encoded.store(
+                    (best_move.0 * 15 + best_move.1) as i32,
+                    Ordering::Relaxed,
+                );
                 self.last_root_score = root_score;
+                let elapsed_ms = (self.start_time.elapsed().as_millis() as u64 - t).max(1);
                 last_layer_ms = elapsed_ms;
                 self.last_completed_depth = current_depth;
                 self.last_depth_time_ms = elapsed_ms;

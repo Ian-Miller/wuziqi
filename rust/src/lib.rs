@@ -87,6 +87,14 @@ impl AnyAi {
             AnyAi::Mcts(ai) => ai.clear(),
         }
     }
+
+    /// 读取当前最优走法编码（row*15+col），-1 表示尚未确定。
+    fn get_best_move_encoded(&self) -> i32 {
+        match self {
+            AnyAi::Minimax(ai) => ai.best_move_encoded.load(std::sync::atomic::Ordering::Relaxed),
+            AnyAi::Mcts(ai) => ai.best_move_encoded.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
 }
 
 // ============================================================================
@@ -291,6 +299,21 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeValidate(
 ) {
     if let Some(ai) = unsafe { ai_from_ptr(ptr) } {
         ai.validate();
+    }
+}
+
+/// 读取当前最优走法（思考过程中实时可用，用于落子预览）
+/// Java: int nativeGetBestMove(long ptr)
+/// 返回: row * 15 + col，-1 表示尚未确定
+#[no_mangle]
+pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeGetBestMove(
+    _env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+) -> jint {
+    if ptr == 0 { return -1; }
+    match unsafe { &*(ptr as *const AnyAi) } {
+        ai => ai.get_best_move_encoded(),
     }
 }
 

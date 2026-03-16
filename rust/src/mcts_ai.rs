@@ -9,7 +9,7 @@
 //! - EASY：探索常数 C=2.0，时间短（500ms），AI 更随机、更容易犯错
 //! - MEDIUM：探索常数 C=1.2，时间中等（1500ms），兼顾探索与利用
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -44,7 +44,7 @@ const EASY_DIAGONAL_MISS_ATTACK: f64 = 0.55;  // 自己斜方向的赢棋有约�
 const EASY_DIAGONAL_MISS_DEFENSE: f64 = 0.72; // 对方斜方向的威胁防守更差（约七成看漏）
 
 /// 进度回调节流参数（避免 JNI 高频调用影响算力）
-const PROGRESS_REPORT_INTERVAL_MS: u64 = 100;
+const PROGRESS_REPORT_INTERVAL_MS: u64 = 50;
 const PROGRESS_MIN_DELTA_PERCENT: i32 = 1;
 
 // ============================================================================
@@ -172,6 +172,9 @@ pub struct MctsAi {
     sample_top_n: usize,
     /// 伪随机状态（xorshift64）
     rng_state: u64,
+    /// 当前最优走法（实时预览用）。
+    /// 存储 row*15+col；-1 表示尚未确定。搜索线程写，Kotlin 线程读。
+    pub best_move_encoded: Arc<AtomicI32>,
 }
 
 impl MctsAi {
@@ -374,6 +377,7 @@ impl MctsAi {
             sample_temperature,
             sample_top_n,
             rng_state: seed ^ 0xA076_1D64_78BD_642F,
+            best_move_encoded: Arc::new(AtomicI32::new(-1)),
         }
     }
 
@@ -410,6 +414,20 @@ impl MctsAi {
             // 每次迭代：Selection → Expansion → Evaluation → Backpropagation
             let mut board_clone = board.clone();
             self.run_one_iteration(&mut root, &mut board_clone, mover);
+
+            // 每 PROGRESS_HEARTBEAT_INTERVAL 次迭代更新实时最优走法（供 Kotlin 端轮询预览）
+            if iter_count % PROGRESS_HEARTBEAT_INTERVAL == 0 {
+                if let Some(best) = root.children.iter()
+                    .filter_map(|c| c.mv.map(|mv| (mv, c.visits)))
+                    .max_by_key(|&(_, v)| v)
+                    .map(|(mv, _)| mv)
+                {
+                    self.best_move_encoded.store(
+                        (best.0 * 15 + best.1) as i32,
+                        Ordering::Relaxed,
+                    );
+                }
+            }
         }
 
         // 正常情况：访问次数最多

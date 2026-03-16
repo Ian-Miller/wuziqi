@@ -18,6 +18,7 @@ import io.github.ian_miller.wuziqi.domain.repository.GameRepository
 import io.github.ian_miller.wuziqi.ai.RustAi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.actor
@@ -224,8 +225,10 @@ class GameViewModelV2 @Inject constructor(
     )
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState
-    private val _aiProgress = MutableStateFlow(0f)
-    val aiProgress: StateFlow<Float> = _aiProgress
+    private val progressTracker = SoftProgressTracker()
+    val aiProgress: StateFlow<Float> = progressTracker.progress
+    /** AI 思考中的当前最优走法（实时轮询 Rust 侧，触发 uiModel 重组） */
+    private val _aiBestMoveHint = MutableStateFlow<Pair<Int, Int>?>(null)
 
     // ========================================================================
     // 合并后的 UI 模型（供 Compose 直接使用）
@@ -254,6 +257,8 @@ class GameViewModelV2 @Inject constructor(
         val aiHint: Pair<Int, Int>?,
         val isCalculatingHint: Boolean,
         val canUndo: Boolean,
+        /** AI 思考中的当前最优走法（用于落子预览；null = 尚未确定或非 AI 思考状态） */
+        val aiBestMoveHint: Pair<Int, Int>?,
         // UI 对话框
         val showSettings: Boolean,
         val showDifficultyToast: Boolean,
@@ -279,6 +284,7 @@ class GameViewModelV2 @Inject constructor(
                 aiHint = null,
                 isCalculatingHint = false,
                 canUndo = false,
+                aiBestMoveHint = null,
                 showSettings = false,
                 showDifficultyToast = false,
                 showingAssistHint = false,
@@ -286,8 +292,10 @@ class GameViewModelV2 @Inject constructor(
         }
     }
 
-    val uiModel: StateFlow<UiModel> = combine(_gameState, _uiState, _aiProgress) { state, ui, progress ->
-        buildUiModel(state, ui, progress)
+    val uiModel: StateFlow<UiModel> = combine(
+        _gameState, _uiState, progressTracker.progress, _aiBestMoveHint
+    ) { state, ui, progress, bestMove ->
+        buildUiModel(state, ui, progress, bestMove)
     }
         .stateIn(viewModelScope, SharingStarted.Eagerly, UiModel.loading())
     
@@ -985,7 +993,7 @@ class GameViewModelV2 @Inject constructor(
     // UiModel 构建（私有）
     // ========================================================================
 
-    private fun buildUiModel(state: State, ui: UiState, aiProgressRaw: Float): UiModel {
+    private fun buildUiModel(state: State, ui: UiState, aiProgressRaw: Float, bestMoveHint: Pair<Int, Int>?): UiModel {
         val gameStatus = when (state) {
             is State.Initializing -> GameStatus.NOT_STARTED
             is State.Idle -> GameStatus.NOT_STARTED
@@ -1093,15 +1101,15 @@ class GameViewModelV2 @Inject constructor(
             settings = settings,
             aiPlayerColor = aiPlayerColor,
             pvpBottomIsBlack = pvpBottomIsBlack,
-            isAiThinking = state is State.WaitingForAi || state is State.Pausing || state is State.Paused || state is State.Delaying,
+            isAiThinking = state is State.WaitingForAi || state is State.Pausing || state is State.Paused,
             aiProgress = when (state) {
                 is State.WaitingForAi, is State.Pausing, is State.Paused -> aiProgressRaw.coerceIn(0f, 1f)
-                is State.Delaying -> 0.02f
                 else -> 0f
             },
             aiHint = aiHint,
             isCalculatingHint = isCalculatingHint,
             canUndo = canUndo,
+            aiBestMoveHint = if (state is State.WaitingForAi || state is State.Pausing) bestMoveHint else null,
             showSettings = ui.showSettings,
             showDifficultyToast = ui.showDifficultyToast,
             showingAssistHint = ui.showingAssistHint,
@@ -1305,54 +1313,192 @@ class GameViewModelV2 @Inject constructor(
 
     private fun launchAiThinking(state: State.WaitingForAi) {
         cancelAiJob()
-        _aiProgress.value = 0f
+        progressTracker.start(aiTimeLimitMs(state.difficulty))   // 重置并传入 AI 时间预算
         val aiColorInt = if (state.aiPlayerColor == PieceColor.BLACK) 1 else 2
         val minAnimMs = minProgressAnimMs(state.difficulty)
+        // 仅在进度明显未到位时才保留少量收尾动画预算
+        val finishBudgetMs = 282L
         aiJob = viewModelScope.launch(Dispatchers.Default) {
             val thinkStart = System.currentTimeMillis()
             try {
                 val ai = getOrCreateRustAi(state.difficulty, aiColorInt)
                 if (ai == null) {
-                    _aiProgress.value = 0f
+                    progressTracker.cancel()
                     sendCommand(Cmd.AiCancelled)
                     return@launch
                 }
                 val boardBytes = state.board.toByteArray()
-                val move = ai.takeTurn(boardBytes) { percent ->
-                    val p = (percent.coerceIn(0, 100) / 100f)
-                    _aiProgress.value = maxOf(_aiProgress.value, p)
-                }
-                if (move != null) {
-                    // 最小动画时长保障：AI 决策过快时，平滑填充进度环再落子。
-                    // 避免 EASY/MEDIUM 即时赢棋的情况下进度环只有一丁点就消失。
-                    val elapsed = System.currentTimeMillis() - thinkStart
-                    val remaining = minAnimMs - elapsed
-                    if (remaining > 40L) {
-                        val startP = _aiProgress.value
-                        val targetP = 0.94f
-                        val steps = (remaining / 40L).toInt().coerceIn(1, 60)
-                        for (i in 1..steps) {
-                            if (!isActive) break
-                            val t = i.toFloat() / steps
-                            _aiProgress.value = startP + (targetP - startP) * t
-                            delay(40L)
-                        }
+
+                // 启动最优走法轮询协程（200ms 间隔），随 aiJob 自动取消
+                val pollJob = launch {
+                    while (isActive) {
+                        delay(200L)
+                        _aiBestMoveHint.value = ai.getBestMove()
                     }
-                    _aiProgress.value = 1f
-                    // 短暂等待让 UI 帧渲染出进度环 100% 后再落子（避免帧间撕裂）
-                    delay(40L)
+                }
+
+                val move = ai.takeTurn(boardBytes) { percent ->
+                    // Rust 回调进度直通 [0, 1]；速度上限公式自动分配空间
+                    progressTracker.advanceTo(percent.coerceIn(0, 100) / 100f)
+                }
+                pollJob.cancel()
+                _aiBestMoveHint.value = null   // 落子前清除预览
+                if (move != null) {
+                    val currentProgress = progressTracker.progress.value
+                    // 仅在进度明显未到位时才补足最小动画时长；若视觉上已接近满环则立即落子
+                    val elapsed = System.currentTimeMillis() - thinkStart
+                    val fillRemaining = if (currentProgress < 0.92f) {
+                        (minAnimMs - elapsed - finishBudgetMs).coerceAtLeast(0L)
+                    } else {
+                        0L
+                    }
+                    if (fillRemaining > 0L) {
+                        delay(fillRemaining)
+                    }
+                    // 仅在尚未接近满环时做短暂补满，避免已经满环后还明显等待
+                    if (progressTracker.progress.value < 0.985f) {
+                        progressTracker.setManualTarget(1.0f)
+                        delay(120L)
+                    }
+                    progressTracker.complete()
                     sendCommand(Cmd.AiDone(Piece(move.first, move.second, state.aiPlayerColor)))
                 } else {
-                    // AI 被取消（invalidate 后返回 null）——通知状态机清理
-                    _aiProgress.value = 0f
+                    // AI 被取消（invalidate 后返回 null）
+                    progressTracker.cancel()
                     sendCommand(Cmd.AiCancelled)
                 }
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) e.printStackTrace()
-                _aiProgress.value = 0f
+                progressTracker.cancel()
                 sendCommand(Cmd.AiCancelled)
             }
         }
+    }
+
+    /**
+     * 软性进度追踪器——倒计时 + Rust 增量池（时间精确版）。
+     *
+     * 核心修复：用实际帧间隔 [dt] 替代固定 FRAME_MS 计算 baseInc 和 drain，
+     * 消除主线程波动（GC、渲染峰值）导致的"明显不动"。
+     *
+     * 设计：
+     *   1. base 速率：K 倍时限填满，始终有进度，与真实 dt 等比。
+     *   2. Rust 增量池：回调增量缓存到 pendingBoost，指数衰减释放（每 16ms 15%），
+     *      衰减速率也与真实 dt 等比，确保时间精度。
+     *   3. 速度上限：inc ≤ (1−displayed)×dt/remaining，保留空间给后续回调。
+     *   4. manualTarget（fill/finish）绕过上限，约 250ms 平滑到位再 complete()。
+     */
+    private inner class SoftProgressTracker {
+        private val _progress = MutableStateFlow(0f)
+        val progress: StateFlow<Float> = _progress
+
+        @Volatile private var rustProgress: Float = 0f
+        @Volatile private var manualTarget: Float = 0f
+        @Volatile private var timeLimitMs: Long = 1000L
+        @Volatile private var startTimeMs: Long = 0L
+
+        // 以下仅在 loopJob（Main）访问
+        private var displayed: Float = 0f
+        private var prevRust: Float = 0f
+        private var pendingBoost: Float = 0f
+
+        private var loopJob: Job? = null
+
+        private val K = 2.0f
+        private val DRAIN_FACTOR = 0.15f   // 每 16ms 释放 15% 的 boost 池
+        private val BASE_FRAME_MS = 16f    // drain 速率的参考帧时长
+
+        fun start(aiTimeLimitMs: Long) {
+            loopJob?.cancel()
+            rustProgress = 0f; manualTarget = 0f
+            displayed = 0f; prevRust = 0f; pendingBoost = 0f
+            _progress.value = 0f
+            timeLimitMs = aiTimeLimitMs.coerceAtLeast(1L)
+            startTimeMs = System.currentTimeMillis()
+            loopJob = viewModelScope.launch {
+                var lastMs = startTimeMs
+                while (isActive) {
+                    val now = System.currentTimeMillis()
+                    val dt = (now - lastMs).toFloat().coerceIn(1f, 150f)
+                    lastMs = now
+                    tick(now, dt)
+                    delay(16L)
+                }
+            }
+        }
+
+        private fun tick(now: Long, dt: Float) {
+            val elapsed = (now - startTimeMs).toFloat()
+            val T = timeLimitMs.toFloat()
+
+            /* ① 收集 Rust 增量 */
+            val rp = rustProgress
+            pendingBoost += (rp - prevRust).coerceAtLeast(0f)
+            prevRust = rp
+
+            /* ② 指数衰减释放（与真实 dt 等比） */
+            val drainFactor = (DRAIN_FACTOR * dt / BASE_FRAME_MS).coerceIn(0f, 1f)
+            val desiredDrain = pendingBoost * drainFactor
+
+            /* ③ base 增量（时间精确） */
+            val baseInc = dt / (K * T)
+
+            /* ④ 期望增量 = base + drain */
+            var inc = baseInc + desiredDrain
+
+            /* ⑤ 速度上限：inc ≤ (1−displayed) × dt / remaining */
+            val remaining = T - elapsed
+            if (remaining > 0f) {
+                val maxInc = (1f - displayed) * dt / remaining
+                inc = inc.coerceAtMost(maxInc)
+            }
+
+            /* ⑥ 回算 boost 实际消耗量 */
+            pendingBoost = (pendingBoost - (inc - baseInc).coerceAtLeast(0f)).coerceAtLeast(0f)
+
+            /* ⑦ manualTarget 绕过速度上限 */
+            val mt = manualTarget
+            if (mt > displayed + 0.001f) {
+                inc = maxOf(inc, (mt - displayed) * (dt / BASE_FRAME_MS * 0.20f).coerceIn(0f, 1f))
+            }
+
+            displayed = (displayed + inc).coerceIn(0f, 1f)
+            _progress.value = displayed
+        }
+
+        /** Rust 回调：推进上报进度（只增不减） */
+        fun advanceTo(value: Float) {
+            val c = value.coerceIn(0f, 1f)
+            if (c > rustProgress) rustProgress = c
+        }
+
+        /** fill/finish 专用：绕过速度上限，约 250ms 平滑填满 */
+        fun setManualTarget(value: Float) {
+            val c = value.coerceIn(0f, 1f)
+            if (c > manualTarget) manualTarget = c
+        }
+
+        /** AI 落子前：立即居满并停止循环 */
+        fun complete() {
+            rustProgress = 1f; manualTarget = 1f; displayed = 1f
+            _progress.value = 1f; loopJob?.cancel(); loopJob = null
+        }
+
+        /** AI 取消 / 出错：立即清零 */
+        fun cancel() {
+            loopJob?.cancel(); loopJob = null; rustProgress = 0f
+            manualTarget = 0f; displayed = 0f; _progress.value = 0f
+        }
+    }
+    /**
+     * AI 实际时间限制（与 Rust 侧创建参数保持同步）。
+     * 用于 SoftProgressTracker 计算时间基础进度。
+     */
+    private fun aiTimeLimitMs(difficulty: Difficulty): Long = when (difficulty) {
+        Difficulty.EASY   -> 650L
+        Difficulty.MEDIUM -> 1800L
+        Difficulty.HARD   -> 4000L
+        Difficulty.MASTER -> 12000L
     }
 
     /**
@@ -1405,10 +1551,10 @@ class GameViewModelV2 @Inject constructor(
     }
 
     private fun validateAi() { rustAi?.validate() }
-    private fun invalidateAi() { rustAi?.invalidate(); _aiProgress.value = 0f }
-    private fun destroyAi() { rustAi?.destroy(); rustAi = null; _aiProgress.value = 0f }
+    private fun invalidateAi() { rustAi?.invalidate(); progressTracker.cancel() }
+    private fun destroyAi() { rustAi?.destroy(); rustAi = null; progressTracker.cancel() }
     private fun invalidateAndDestroyAi() { invalidateAi(); destroyAi() }
-    private fun cancelAiJob() { aiJob?.cancel(); aiJob = null; _aiProgress.value = 0f }
+    private fun cancelAiJob() { aiJob?.cancel(); aiJob = null; progressTracker.cancel() }
     private fun cancelAssistJob() { assistJob?.cancel(); assistJob = null }
     private fun cancelDelayJob() { delayJob?.cancel(); delayJob = null }
     

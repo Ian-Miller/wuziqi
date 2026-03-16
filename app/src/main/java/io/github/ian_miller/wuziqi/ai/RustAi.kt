@@ -88,6 +88,7 @@ class RustAi private constructor(
     ): Int
     private external fun nativeInvalidate(ptr: Long)
     private external fun nativeValidate(ptr: Long)
+    private external fun nativeGetBestMove(ptr: Long): Int
     
     /**
      * 执行思考（takeTurn）
@@ -138,6 +139,17 @@ class RustAi private constructor(
         if (!isDestroyed) {
             nativeValidate(nativePtr)
         }
+    }
+
+    /**
+     * 读取当前最优走法（思考过程中实时可用）。
+     * 可在 AI 思考期间任意线程轮询，用于落子预览功能。
+     * @return (row, col) 或 null（尚未确定）
+     */
+    fun getBestMove(): Pair<Int, Int>? {
+        if (isDestroyed) return null
+        val enc = nativeGetBestMove(nativePtr)
+        return if (enc >= 0) enc.toPosition() else null
     }
     
     /**

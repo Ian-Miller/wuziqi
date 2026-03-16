@@ -405,52 +405,7 @@ fun PlayerAvatar(
     )
     val glowColor = if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = alpha) else Color.Transparent
     val targetProgress = progress.coerceIn(0f, 1f)
-
-    // 软式进度：融合“追踪 + 惯性”，进度上报不均匀时避免卡顿感
-    var displayedProgress by remember { mutableStateOf(0f) }
-    var lastReported by remember { mutableStateOf(0f) }
-    var emaSpeed by remember { mutableStateOf(0f) }
     val isShowingProgress = !isPlayer && (isActive || targetProgress > 0f)
-
-    LaunchedEffect(isShowingProgress, targetProgress) {
-        if (!isShowingProgress) {
-            displayedProgress = 0f
-            lastReported = 0f
-            emaSpeed = 0f
-            return@LaunchedEffect
-        }
-
-        var lastFrame = 0L
-        while (isShowingProgress) {
-            withFrameNanos { now ->
-                if (lastFrame == 0L) {
-                    lastFrame = now
-                    return@withFrameNanos
-                }
-
-                val dt = ((now - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
-                lastFrame = now
-
-                val reportDelta = (targetProgress - lastReported).coerceAtLeast(0f)
-                val observedSpeed = reportDelta / dt
-                emaSpeed = emaSpeed * 0.84f + observedSpeed * 0.16f
-                val predictedSpeed = if (reportDelta < 0.0015f) emaSpeed * 0.92f else emaSpeed
-
-                // targetProgress=1.0 时（AI 落子前）用弹簧力快速补全圆弧，其余保持 EMA 追踪
-                val catchupFactor = if (targetProgress >= 0.999f) 0.62f else 0.24f
-                val catchup = (targetProgress - displayedProgress).coerceAtLeast(0f) * catchupFactor
-                val inertia = predictedSpeed * dt * 0.28f
-
-                var next = displayedProgress + catchup + inertia
-                if (targetProgress < 0.999f) {
-                    // 正常态：最多追进到 97%，保留"快要满"的期待感
-                    next = minOf(next, 0.97f)
-                }
-                displayedProgress = next.coerceIn(0f, 1f)
-                lastReported = targetProgress
-            }
-        }
-    }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -463,15 +418,7 @@ fun PlayerAvatar(
                     if (stroke <= 0f || borderColor == Color.Transparent) return@drawWithContent
 
                     if (isShowingProgress) {
-                        val doneSweep = 360f * displayedProgress.coerceIn(0f, 1f)
-                        // 先画底轨（高对比但半透明），再画完成段
-                        drawArc(
-                            color = progressColor.copy(alpha = 0.34f),
-                            startAngle = -90f,
-                            sweepAngle = 360f,
-                            useCenter = false,
-                            style = Stroke(width = stroke, cap = StrokeCap.Round)
-                        )
+                        val doneSweep = 360f * targetProgress
                         if (doneSweep > 0.8f) {
                             drawArc(
                                 color = progressColor,
