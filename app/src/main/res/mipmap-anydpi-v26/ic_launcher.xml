@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 背景：木色纯色，与前景棋盘融合 -->
+    <background android:drawable="@color/ic_launcher_background"/>
+    <!-- 前景：棋盘 + 棋子 + 放大镜 -->
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+    <!-- Android 13+ 单色图标（Themed Icons）-->
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>

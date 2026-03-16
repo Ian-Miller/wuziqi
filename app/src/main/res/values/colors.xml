@@ -16,4 +16,5 @@
     <color name="black_piece">#FF000000</color>
     <color name="white_piece">#FFFFFFFF</color>
     <color name="highlight">#FFFFEB3B</color>
+    <color name="ic_launcher_background">#D4A96A</color>
 </resources>
