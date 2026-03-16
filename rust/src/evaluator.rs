@@ -3,15 +3,15 @@ use crate::board::{Board, Color, BOARD_SIZE};
 /// 棋型分数
 pub const SCORE_FIVE: i32 = 100_000; // 五连（必胜）
 pub const SCORE_FOUR: i32 = 10_000; // 活四
-pub const SCORE_BLOCKED_FOUR: i32 = 1_000; // 冲四
-pub const SCORE_THREE: i32 = 1_000; // 活三
+pub const SCORE_BLOCKED_FOUR: i32 = 3_000; // 冲四（强制对手响应，比活三高一个量级）
+pub const SCORE_THREE: i32 = 1_000; // 活三（威胁但非强制）
 pub const SCORE_BLOCKED_THREE: i32 = 100; // 眠三
 pub const SCORE_TWO: i32 = 100; // 活二
 pub const SCORE_BLOCKED_TWO: i32 = 10; // 眠二
 
 /// 复合威胁奖励分（跨方向组合）
 /// 这些加在 evaluate_position 的总分之上，让 AI 的启发排序更准确
-const BONUS_DOUBLE_THREE: i32 = 3_000;   // 双活三（两个方向都有活三，含隔活三）
+const BONUS_DOUBLE_THREE: i32 = 5_000;   // 双活三（两方向活三，含隔活三）—— 近乎必胜，介于冲四与活四之间
 const BONUS_DOUBLE_FOUR: i32 = 30_000;   // 双冲四 / 双四（几乎必胜）
 const BONUS_THREE_FOUR: i32 = 20_000;    // 活三 + 冲四
 const BONUS_OPP_DOUBLE_THREE: i32 = 2_000; // 堵对方双活三
@@ -33,14 +33,17 @@ pub fn evaluate_position(board: &Board, row: usize, col: usize, color: Color) ->
         let s = match_pattern_score(pattern);
         score += s;
 
-        // 统计各棋型方向数，用于复合威胁检测
+        // 统计各棋型方向数，用于复合威胁检测。
+        // SCORE_BLOCKED_FOUR (3000) > SCORE_THREE (1000)，两者现在可以直接按阈值区分，
+        // 不再需要对原始 pattern 做反向解析。
         if s >= SCORE_FOUR {
             fours += 1;
         } else if s >= SCORE_BLOCKED_FOUR {
-            // emp>=5 在 count==2 时实际不可达（最大为4），用 emp>=4 检测活三
-            let (cnt, emp, lb, rb) = pattern;
-            let is_active_three = cnt == 2 && emp >= 4 && !lb && !rb;
-            if is_active_three { threes += 1; } else { bfours += 1; }
+            // 冲四（3000+）：强制对手响应
+            bfours += 1;
+        } else if s >= SCORE_THREE {
+            // 活三（1000~2999）：威胁但非强制
+            threes += 1;
         } else {
             // 检测隔活三（跳跃型活三），并加分
             let jump = jump_three_score(board, row, col, dr, dc, color);
@@ -83,9 +86,9 @@ pub fn evaluate_position_with_opp(board: &Board, row: usize, col: usize, color: 
             // 对方有活四：即将五连，直接返回极高防御分
             return my_score + SCORE_FOUR * 2;
         } else if s >= SCORE_BLOCKED_FOUR {
-            let (cnt, emp, lb, rb) = pattern;
-            let is_three = cnt == 2 && emp >= 4 && !lb && !rb;
-            if is_three { opp_threes += 1; } else { opp_bfours += 1; }
+            opp_bfours += 1;
+        } else if s >= SCORE_THREE {
+            opp_threes += 1;
         }
     }
     let opp_bonus = if opp_bfours >= 2 || (opp_bfours >= 1 && opp_threes >= 1) {

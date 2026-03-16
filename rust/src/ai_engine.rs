@@ -45,6 +45,11 @@ const ASPIRATION_RETRY_MAX: i32 = 2;
 /// MASTER 根节点候选去冗余：前排候选若过于邻近，延后处理
 const MASTER_REDUNDANT_RADIUS: i32 = 1;
 
+/// 双威胁阈值： find_critical_block 在连四查找失败后的备用阈值。
+/// 覆盖双活三（≈ 2×1000 + 5000 = 7000）、三四组合（≈24000）等
+/// ——这些期望在 minimax 之前就强制封堵。
+const DOUBLE_THREAT_THRESHOLD: i32 = 6_000;
+
 /// 记录最近若干次决策（主要用于“撤销后反复同手”惩罚）
 const DECISION_HISTORY_CAP: usize = 24;
 
@@ -579,8 +584,8 @@ impl GomokuAi {
                 opp_best_threat = s;
             }
         }
-        // 双三（≈5000）以上才惩罚；单活三（1000）属正常局面，交给深搜处理
-        let threat_penalty = if opp_best_threat >= SCORE_BLOCKED_FOUR * 4 {
+        // 双三（≈5000）以上才惩罚；单活三（≈1000）属正常局面，交给深搜处理
+        let threat_penalty = if opp_best_threat >= DOUBLE_THREAT_THRESHOLD {
             opp_best_threat / 4
         } else {
             0
@@ -669,7 +674,8 @@ impl GomokuAi {
             .iter()
             .filter_map(|&(r, c)| {
                 let s = evaluate_position(board, r, c, opp);
-                if s >= SCORE_FOUR { Some(((r, c), s)) } else { None }
+                // DOUBLE_THREAT_THRESHOLD 覆盖双活三（≈7000）和更高的组合威胁
+                if s >= DOUBLE_THREAT_THRESHOLD { Some(((r, c), s)) } else { None }
             })
             .max_by_key(|&(_, s)| s)
             .map(|((r, c), _)| (r, c))
@@ -1275,7 +1281,7 @@ impl GomokuAi {
             let child_hash = self.zobrist.hash_move(hash, row, col, player);
             // LMR（Late Move Reduction）：后序且“安静”的走法先浅搜
             // 以 move_hint_score 区分是否高威胁（>= 冲四级）
-            let is_quiet = *move_hint_score < SCORE_BLOCKED_FOUR;
+            let is_quiet = *move_hint_score < SCORE_THREE * 2; // 2000: 单活三(1000)以下为安静，冲四/双活三(3000+)不缩减
             let reduce = if depth >= 5 && idx >= 4 && is_quiet { 1 } else { 0 };
             let search_depth = (depth - 1 - reduce).max(0);
 
