@@ -69,6 +69,12 @@ data class RemoteGameState(
     val isGameOver: Boolean = false,
     val drawOfferedByOpponent: Boolean = false,
     val mySeq: Int = 2,
+    /** 我方已发出求和请求，等待对方回应 */
+    val drawSentByMe: Boolean = false,
+    /** 对方发来的再来一局请求中对方想执的颜色（null 表示无请求） */
+    val rematchOfferedColor: PieceColor? = null,
+    /** 我方已发出再来一局请求，等待对方回应 */
+    val rematchSentByMe: Boolean = false,
 ) {
     val isMyTurn: Boolean get() = currentTurn == myColor && !isGameOver
 
@@ -138,6 +144,7 @@ class RemoteViewModel @Inject constructor(
     // 音效播放
     private val soundPool = SoundPool.Builder().setMaxStreams(2).build()
     private var moveSoundId: Int = 0
+    private var stampSoundId: Int = 0
     @Suppress("DEPRECATION")
     private val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
@@ -262,6 +269,8 @@ class RemoteViewModel @Inject constructor(
         viewModelScope.launch {
             _lanPeerConnected.value = false
             _gameState.value?.let { saveGameToDisk(it) }
+            // 游戏已结束时不自动重连（对方已主动离开）
+            if (_gameState.value?.isGameOver == true) return@launch
             // 加入方：自动重连
             if (!lanIsHost && lanStoredIp.isNotEmpty()) {
                 startAutoReconnect()
@@ -642,17 +651,29 @@ class RemoteViewModel @Inject constructor(
         // 先更新本地状态，确保即使发送失败也能正确清理
         _gameState.update { it?.copy(winner = gs.myColor.opposite(), isGameOver = true, mySeq = gs.mySeq + 1) }
         clearSavedGame()
+        // 游戏已结束：停止重连尝试
+        reconnectJob?.cancel()
         // 尽力通知对方（发送失败不影响本地状态）
         lanBridge?.send(msg)
         sendNostrGameMsg(msg)
     }
 
+    private var drawTimeoutJob: Job? = null
+
     fun offerDraw() {
         val gs = _gameState.value ?: return
+        if (gs.drawSentByMe) return  // 已发出，避免重复发送
         val msg = GameMsg(MsgType.DRAW_REQUEST, gameId = gs.gameId, seq = gs.mySeq)
         lanBridge?.send(msg)
         sendNostrGameMsg(msg)
-        _gameState.update { it?.copy(mySeq = gs.mySeq + 1) }
+        _gameState.update { it?.copy(drawSentByMe = true, mySeq = gs.mySeq + 1) }
+        // 发起方超时 t_2 = 30s：超时后自动取消等待状态，任何延迟到达的 DRAW_ACCEPT 将被拒绝
+        drawTimeoutJob?.cancel()
+        drawTimeoutJob = viewModelScope.launch {
+            delay(5_000L)
+            _gameState.update { it?.copy(drawSentByMe = false) }
+            drawTimeoutJob = null
+        }
     }
 
     fun acceptDraw() {
@@ -672,6 +693,80 @@ class RemoteViewModel @Inject constructor(
         lanBridge?.send(msg)
         sendNostrGameMsg(msg)
         _gameState.update { it?.copy(drawOfferedByOpponent = false, mySeq = gs.mySeq + 1) }
+    }
+
+    // ── 再来一局 ───────────────────────────────────────────────────────────────
+
+    private var rematchTimeoutJob: Job? = null
+
+    /** 请求再来一局，myWantedColor = 我方想执的颜色 */
+    fun requestRematch(myWantedColor: PieceColor) {
+        val gs = _gameState.value ?: return
+        if (!gs.isGameOver || gs.rematchSentByMe) return
+        val msg = GameMsg(
+            MsgType.REMATCH_REQUEST, gameId = gs.gameId, seq = gs.mySeq,
+            payload = myWantedColor.name,
+        )
+        lanBridge?.send(msg)
+        sendNostrGameMsg(msg)
+        _gameState.update { it?.copy(rematchSentByMe = true, mySeq = gs.mySeq + 1) }
+        // 发起方超时 t_2 = 20s
+        rematchTimeoutJob?.cancel()
+        rematchTimeoutJob = viewModelScope.launch {
+            delay(20_000L)
+            _gameState.update { it?.copy(rematchSentByMe = false) }
+        }
+    }
+
+    fun acceptRematch() {
+        val gs = _gameState.value ?: return
+        val offeredColor = gs.rematchOfferedColor ?: return  // 对方想执的颜色
+        val myNewColor = offeredColor.opposite()
+        val msg = GameMsg(
+            MsgType.REMATCH_ACCEPT, gameId = gs.gameId, seq = gs.mySeq,
+            payload = myNewColor.name,  // 告知对方：我方执此颜色
+        )
+        lanBridge?.send(msg)
+        sendNostrGameMsg(msg)
+        _gameState.update { it?.copy(mySeq = gs.mySeq + 1) }
+        startRematch(myColor = myNewColor)
+    }
+
+    fun rejectRematch() {
+        val gs = _gameState.value ?: return
+        val msg = GameMsg(MsgType.REMATCH_REJECT, gameId = gs.gameId, seq = gs.mySeq)
+        lanBridge?.send(msg)
+        sendNostrGameMsg(msg)
+        _gameState.update { it?.copy(rematchOfferedColor = null, mySeq = gs.mySeq + 1) }
+    }
+
+    /** 清除对方发来的再开局请求（超时自动调用） */
+    fun clearRematchOffer() {
+        _gameState.update { it?.copy(rematchOfferedColor = null) }
+    }
+
+    /** 重置棋盘开始新一局，保持连接不断 */
+    private fun startRematch(myColor: PieceColor) {
+        rematchTimeoutJob?.cancel()
+        val gs = _gameState.value ?: return
+        _gameState.value = RemoteGameState(
+            board = Board.empty(),
+            moveHistory = emptyList(),
+            currentTurn = PieceColor.BLACK,
+            myColor = myColor,
+            gameId = gs.gameId,
+            mySeq = 2,
+        )
+        // 更新 phase 中的 myColor 和 isMyTurn
+        val phase = _state.value.phase
+        if (phase is RemotePhase.Connected) {
+            _state.update {
+                it.copy(phase = phase.copy(
+                    myColor = myColor,
+                    isMyTurn = myColor == PieceColor.BLACK,
+                ))
+            }
+        }
     }
 
     /** 从对方发来的 RESYNC 消息重建棋盘（只接受落子数 ≥ 本地的状态） */
@@ -726,13 +821,28 @@ class RemoteViewModel @Inject constructor(
             MsgType.RESIGN -> {
                 _gameState.update { it?.copy(winner = gs.myColor, isGameOver = true) }
                 clearSavedGame()
+                // 对方已认输离开：停止重连尝试
+                reconnectJob?.cancel()
             }
             MsgType.DRAW_REQUEST -> _gameState.update { it?.copy(drawOfferedByOpponent = true) }
             MsgType.DRAW_ACCEPT -> {
-                _gameState.update { it?.copy(isDraw = true, isGameOver = true, drawOfferedByOpponent = false) }
-                clearSavedGame()
+                drawTimeoutJob?.cancel(); drawTimeoutJob = null
+                if (gs.drawSentByMe) {
+                    // 正常流程：我方求和，对方接受，游戏结束
+                    _gameState.update { it?.copy(isDraw = true, isGameOver = true, drawOfferedByOpponent = false, drawSentByMe = false) }
+                    clearSavedGame()
+                } else {
+                    // 超时后收到延迟接受：我方已取消，向对方发送拒绝以维持双端一致性
+                    val reject = GameMsg(MsgType.DRAW_REJECT, gameId = gs.gameId, seq = gs.mySeq)
+                    lanBridge?.send(reject)
+                    sendNostrGameMsg(reject)
+                }
             }
-            MsgType.DRAW_REJECT -> _gameState.update { it?.copy(drawOfferedByOpponent = false) }
+            MsgType.DRAW_REJECT -> {
+                // 对方拒绝求和：取消超时计时，清除发送状态
+                drawTimeoutJob?.cancel(); drawTimeoutJob = null
+                _gameState.update { it?.copy(drawOfferedByOpponent = false, drawSentByMe = false) }
+            }
             MsgType.RESYNC_REQUEST -> {
                 // 对方重连后请求棋盘同步
                 val movesStr = gs.moveHistory.map { "${it.first},${it.second}" }
@@ -741,6 +851,25 @@ class RemoteViewModel @Inject constructor(
                 sendNostrGameMsg(resync)
             }
             MsgType.RESYNC -> rebuildFromResync(msg)
+            MsgType.REMATCH_REQUEST -> {
+                // 对方请求再来一局：payload = 对方想执的颜色
+                val wantedColor = runCatching { PieceColor.valueOf(msg.payload) }.getOrNull()
+                if (wantedColor != null && gs.isGameOver) {
+                    _gameState.update { it?.copy(rematchOfferedColor = wantedColor) }
+                }
+            }
+            MsgType.REMATCH_ACCEPT -> {
+                if (gs.rematchSentByMe && gs.isGameOver) {
+                    // 对方接受了我方的请求，payload = 对方选择执的颜色
+                    val opponentColor = runCatching { PieceColor.valueOf(msg.payload) }.getOrNull()
+                    val myColor = opponentColor?.opposite() ?: gs.myColor.opposite()
+                    startRematch(myColor = myColor)
+                }
+            }
+            MsgType.REMATCH_REJECT -> {
+                _gameState.update { it?.copy(rematchSentByMe = false) }
+                rematchTimeoutJob?.cancel()
+            }
             else -> Unit
         }
     }
@@ -753,6 +882,8 @@ class RemoteViewModel @Inject constructor(
         try {
             val resId = context.resources.getIdentifier("place_piece", "raw", context.packageName)
             if (resId != 0) moveSoundId = soundPool.load(context, resId, 1)
+            val stampResId = context.resources.getIdentifier("stamp", "raw", context.packageName)
+            if (stampResId != 0) stampSoundId = soundPool.load(context, stampResId, 1)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -763,6 +894,14 @@ class RemoteViewModel @Inject constructor(
         if (!_soundEnabled.value || moveSoundId == 0) return
         try {
             soundPool.play(moveSoundId, 1f, 1f, 1, 0, 1f)
+        } catch (e: Exception) {}
+    }
+
+    fun playStampSound() {
+        if (!AppLifecycleState.isInForeground) return
+        if (!_soundEnabled.value || stampSoundId == 0) return
+        try {
+            soundPool.play(stampSoundId, 1f, 1f, 1, 0, 1f)
         } catch (e: Exception) {}
     }
 
@@ -798,6 +937,7 @@ class RemoteViewModel @Inject constructor(
     fun reset() {
         joinTimeoutJob?.cancel()
         reconnectJob?.cancel()
+        rematchTimeoutJob?.cancel()
         lanBridge?.close()
         lanBridge = null
         lanGameId = ""
@@ -888,6 +1028,7 @@ class RemoteViewModel @Inject constructor(
         super.onCleared()
         joinTimeoutJob?.cancel()
         reconnectJob?.cancel()
+        rematchTimeoutJob?.cancel()
         lanBridge?.close()
         client.disconnect()
         soundPool.release()

@@ -21,6 +21,10 @@ enum class MsgType {
     DRAW_REJECT,     // 拒绝和棋
     RESYNC_REQUEST,  // 请求完整棋局（重连后）
     RESYNC,          // 完整棋局同步（含全部落子历史）
+    REMATCH_REQUEST, // 请求再来一局（携带 payload = 请求方想执的颜色）
+    REMATCH_ACCEPT,  // 接受再来一局
+    REMATCH_REJECT,  // 拒绝再来一局
+    EMOTE,           // 预留：表情/消息（payload = 内容，≤100字符）
 }
 
 // ── 游戏消息模型 ───────────────────────────────────────────────────────────────
@@ -50,6 +54,9 @@ data class GameMsg(
     val moves: List<String> = emptyList(),
     /** 发送方的协议版本号；旧版本不发送此字段，默认 0 */
     val version: Int = 0,
+    /** 通用载荷：REMATCH_REQUEST 时为请求方想执的颜色（"BLACK"/"WHITE"）；
+     *  EMOTE 时为表情/消息内容（≤100字符）；其他消息类型忽略 */
+    val payload: String = "",
 )
 
 // ── JSON 编解码器 ──────────────────────────────────────────────────────────────

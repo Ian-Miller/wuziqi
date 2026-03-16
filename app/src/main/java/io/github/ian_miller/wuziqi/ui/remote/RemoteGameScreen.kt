@@ -4,7 +4,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -16,9 +18,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.delay
 import androidx.hilt.navigation.compose.hiltViewModel
 import io.github.ian_miller.wuziqi.domain.model.PieceColor
 import io.github.ian_miller.wuziqi.ui.game.BoardCanvas
@@ -69,42 +73,13 @@ fun RemoteGameScreen(
 
     val gameState = gs!!
     val s = LocalStrings.current
-    var showResignDialog by remember { mutableStateOf(false) }
+    // 认输确认状态（本地临时态，任意对方请求到来时立即清除）
+    var confirmResign by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     val soundEnabled by viewModel.soundEnabled.collectAsState()
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState()
 
-    // ── 对话框 ────────────────────────────────────────────────────────────────
-
-    if (showResignDialog) {
-        AlertDialog(
-            onDismissRequest = { showResignDialog = false },
-            title = { Text(s.confirmResignTitle) },
-            text = { Text(s.confirmResignText) },
-            confirmButton = {
-                TextButton(onClick = { viewModel.resignRemote(); showResignDialog = false }) {
-                    Text(s.confirmResign, color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showResignDialog = false }) { Text(s.cancel) }
-            },
-        )
-    }
-
-    if (gameState.drawOfferedByOpponent) {
-        AlertDialog(
-            onDismissRequest = { viewModel.rejectDraw() },
-            title = { Text(s.drawOfferedTitle) },
-            text = { Text(s.drawOfferedText) },
-            confirmButton = {
-                TextButton(onClick = { viewModel.acceptDraw() }) { Text(s.acceptDraw) }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.rejectDraw() }) { Text(s.rejectDraw) }
-            },
-        )
-    }
+    // 和棋/再来一局/认输确认 均在操作行内以 AnimatedContent 滑动切换（InlineAction）
 
     // ── 设置面板 ─────────────────────────────────────────────────────────────────────────
     if (showSettings) {
@@ -163,25 +138,153 @@ fun RemoteGameScreen(
 
         Column(modifier = Modifier.fillMaxSize()) {
 
-            // ── 对手 HUD（顶部，对手视角） ─────────────────────────────────
+            // ── 对手 HUD（顶部）+ 操作按钮（棋盘上方）────────────────────────
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .weight(1.3f)
                     .statusBarsPadding(),
                 contentAlignment = Alignment.BottomCenter,
             ) {
-                SinglePlayerGameHud(
-                    isBlack = gameState.myColor.opposite() == PieceColor.BLACK,
-                    isPlayer = true,
-                    isActive = !gameState.isMyTurn && !gameState.isGameOver && lanConnected,
-                    isWinner = gameState.winner == gameState.myColor.opposite(),
-                    isDraw = gameState.isDraw,
-                    gameStatus = if (gameState.isGameOver) GameStatus.FINISHED else GameStatus.PLAYING,
-                    rotate180 = false,
-                    playerName = s.opponent,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                ) {
+                    SinglePlayerGameHud(
+                        isBlack = gameState.myColor.opposite() == PieceColor.BLACK,
+                        isPlayer = true,
+                        isActive = !gameState.isMyTurn && !gameState.isGameOver && lanConnected,
+                        isWinner = gameState.winner == gameState.myColor.opposite(),
+                        isDraw = gameState.isDraw,
+                        gameStatus = if (gameState.isGameOver) GameStatus.FINISHED else GameStatus.PLAYING,
+                        rotate180 = false,
+                        playerName = s.opponent,
+                        onPlayVictorySound = { viewModel.playStampSound() },
+                    )
+                    // 操作行：AnimatedContent 统一管理所有状态（按钮 / 认输确认 / 对方请求）
+                    // 对方请求超时在 LaunchedEffect 中倒计时；认输确认在其自身 content block 中倒计时
+                    if (gameState.drawOfferedByOpponent) {
+                        LaunchedEffect(Unit) {
+                            delay(5_000L)
+                            viewModel.rejectDraw()
+                        }
+                    }
+                    if (gameState.rematchOfferedColor != null) {
+                        LaunchedEffect(gameState.rematchOfferedColor) {
+                            delay(5_000L)
+                            viewModel.clearRematchOffer()
+                        }
+                    }
+                    val hasIncomingRequest =
+                        gameState.drawOfferedByOpponent || gameState.rematchOfferedColor != null
+                    // 任意对方请求优先级最高，立即取消本地认输确认
+                    LaunchedEffect(hasIncomingRequest) {
+                        if (hasIncomingRequest) confirmResign = false
+                    }
+                    // 缓存再来一局颜色，防止退出动画期间 rematchOfferedColor 变 null 导致内容闪变
+                    var lastSeenRematchColor by remember { mutableStateOf(PieceColor.BLACK) }
+                    gameState.rematchOfferedColor?.let { lastSeenRematchColor = it }
+                    // 推导当前操作行状态（优先级：对方请求 > 认输确认 > 按钮 > 游戏结束占位）
+                    val inlineAction: InlineAction = when {
+                        gameState.isGameOver -> InlineAction.Idle
+                        gameState.drawOfferedByOpponent -> InlineAction.IncomingDraw
+                        gameState.rematchOfferedColor != null -> InlineAction.IncomingRematch
+                        confirmResign -> InlineAction.ResignConfirm
+                        else -> InlineAction.Buttons
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    AnimatedContent(
+                        targetState = inlineAction,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp),
+                        contentAlignment = Alignment.Center,
+                        label = "inline_action",
+                        transitionSpec = {
+                            val enteringRequest = targetState == InlineAction.IncomingDraw
+                                    || targetState == InlineAction.IncomingRematch
+                            val enteringResign = targetState == InlineAction.ResignConfirm
+                            val leavingToNeutral = targetState == InlineAction.Buttons
+                                    || targetState == InlineAction.Idle
+                            when {
+                                // 新内容（对方请求或认输确认）从右侧滑入，旧内容向左退出
+                                enteringRequest || enteringResign ->
+                                    (slideInHorizontally(tween(250)) { it } + fadeIn(tween(250))) togetherWith
+                                    (slideOutHorizontally(tween(220)) { -it } + fadeOut(tween(220)))
+                                // 返回按钮或空态：从左侧恢复，旧内容向右退出
+                                leavingToNeutral ->
+                                    (slideInHorizontally(tween(250)) { -it } + fadeIn(tween(250))) togetherWith
+                                    (slideOutHorizontally(tween(220)) { it } + fadeOut(tween(220)))
+                                else ->
+                                    fadeIn(tween(200)) togetherWith fadeOut(tween(200))
+                            }
+                        },
+                    ) { action ->
+                        when (action) {
+                            InlineAction.Idle ->
+                                // 游戏结束：保持行高，避免棋盘跳动
+                                Spacer(Modifier.fillMaxWidth().height(48.dp))
+                            InlineAction.Buttons ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    GlassyButton(
+                                        onClick = { viewModel.offerDraw() },
+                                        modifier = Modifier.weight(1f),
+                                        enabled = !gameState.drawSentByMe,
+                                        containerColor = Color(0xFFA1760D).copy(alpha = 0.88f),
+                                        contentColor = Color(0xFFFFE082),
+                                    ) {
+                                        Icon(Icons.Default.Balance, null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(s.requestDraw)
+                                    }
+                                    GlassyButton(
+                                        onClick = { confirmResign = true },
+                                        modifier = Modifier.weight(1f),
+                                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                    ) {
+                                        Icon(Icons.Default.Flag, null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(s.resign)
+                                    }
+                                }
+                            InlineAction.ResignConfirm -> {
+                                // 认输确认 toast：5s 自动取消；✓=红色（危险操作），✗=中性（取消）
+                                LaunchedEffect(Unit) {
+                                    delay(5_000L)
+                                    confirmResign = false
+                                }
+                                InlineRequestRow(
+                                    message = s.confirmResignTitle,
+                                    onAccept = { viewModel.resignRemote(); confirmResign = false },
+                                    onReject = { confirmResign = false },
+                                    acceptColor = Color(0xFFB71C1C).copy(alpha = 0.88f),
+                                    acceptContentColor = Color.White,
+                                    rejectColor = Color(0xFF5D4037).copy(alpha = 0.5f),
+                                    rejectContentColor = Color(0xFFFFE082),
+                                )
+                            }
+                            InlineAction.IncomingDraw ->
+                                InlineRequestRow(
+                                    message = s.drawOfferedText,
+                                    onAccept = { viewModel.acceptDraw() },
+                                    onReject = { viewModel.rejectDraw() },
+                                )
+                            InlineAction.IncomingRematch ->
+                                InlineRequestRow(
+                                    message = s.rematchOffered(
+                                        if (lastSeenRematchColor == PieceColor.BLACK) s.blackFirst else s.whiteSecond,
+                                    ),
+                                    onAccept = { viewModel.acceptRematch() },
+                                    onReject = { viewModel.rejectRematch() },
+                                )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
             }
 
             // ── 棋盘 ─────────────────────────────────────────────────────────
@@ -231,7 +334,7 @@ fun RemoteGameScreen(
 
             // ── 我方 HUD（底部） ──────────────────────────────────────────────
             Box(
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier.fillMaxWidth().weight(0.8f).navigationBarsPadding(),
                 contentAlignment = Alignment.TopCenter,
             ) {
                 Column(
@@ -248,46 +351,57 @@ fun RemoteGameScreen(
                         rotate180 = false,
                         playerName = s.me,
                         modifier = Modifier.padding(top = 8.dp),
+                        onPlayVictorySound = { viewModel.playStampSound() },
+                        // 游戏结束且尚未发出请求时，显示"点击选择先后手"选择模式
+                        showStartSelection = gameState.isGameOver && !gameState.rematchSentByMe
+                                && gameState.rematchOfferedColor == null,
+                        selectionHint = s.clickToRematch,
+                        onSelect = {
+                            // 点击后请求再来一局：我方执黑（先手）
+                            viewModel.requestRematch(PieceColor.BLACK)
+                        },
+                        // 待回应请求光圈：再来一局=绿，求和=琥珀
+                        pendingGlowColor = when {
+                            gameState.rematchSentByMe -> Color(0xFF4CAF50)
+                            gameState.drawSentByMe -> Color(0xFFFFB300)
+                            else -> null
+                        },
                     )
 
-                    // 操作按钮（游戏进行中时显示）
-                    if (!gameState.isGameOver) {
+                    // 等待回应的状态文字（兼容求和和再来一局两种等待状态）
+                    val pendingStatusText = when {
+                        gameState.rematchSentByMe -> s.rematchRequestSent
+                        gameState.drawSentByMe -> s.drawSentWaiting
+                        else -> null
+                    }
+                    if (pendingStatusText != null) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(IntrinsicSize.Max)
-                                .padding(horizontal = 24.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
                         ) {
-                            GlassyButton(
-                                onClick = { viewModel.offerDraw() },
-                                modifier = Modifier.weight(1f),
-                                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                            ) {
-                                Icon(Icons.Default.Balance, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text(s.requestDraw)
-                            }
-                            GlassyButton(
-                                onClick = { showResignDialog = true },
-                                modifier = Modifier.weight(1f),
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ) {
-                                Icon(Icons.Default.Flag, null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text(s.resign)
-                            }
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = if (gameState.rematchSentByMe) Color(0xFF4CAF50) else Color(0xFFFFB300),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                pendingStatusText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF5D4037),
+                            )
                         }
                     }
+
+                    // 操作按钮（游戏进行中时显示）—— 已移动至对手 HUD 下方（棋盘上方）
                 }
             }
         }
 
-        // ── 断线横幅（顶部悬浮） ──────────────────────────────────────────────
+        // ── 断线横幅（顶部悬浮）：游戏结束后不显示（对方已主动离开） ────────────────────────
         AnimatedVisibility(
-            visible = !lanConnected,
+            visible = !lanConnected && !gameState.isGameOver,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .zIndex(8f),
@@ -407,6 +521,67 @@ fun RemoteGameScreen(
                     color = Color(0xFFFFE082),
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 操作行的状态机，使用纯 data object 保证 AnimatedContent 的 key 稳定（无 lambda 捕获）。
+ * 优先级（高→低）：对方请求 > 认输确认 > 正常按钮 > 游戏结束占位
+ */
+private sealed interface InlineAction {
+    data object Idle : InlineAction           // 游戏结束，维持行高
+    data object Buttons : InlineAction        // 正常操作按钮（求和 / 认输）
+    data object ResignConfirm : InlineAction  // 我方认输确认（临时态，被任意对方请求取代）
+    data object IncomingDraw : InlineAction   // 对方求和请求
+    data object IncomingRematch : InlineAction // 对方再来一局请求
+}
+
+/** 嵌入请求行：接受圆 + 消息文字 + 拒绝圆，颜色可自定义以复用于求和请求和认输确认 */
+@Composable
+private fun InlineRequestRow(
+    message: String,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+    acceptColor: Color = Color(0xFF2E7D32).copy(alpha = 0.88f),
+    acceptContentColor: Color = Color.White,
+    rejectColor: Color = Color(0xFFB71C1C).copy(alpha = 0.88f),
+    rejectContentColor: Color = Color.White,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            onClick = onAccept,
+            modifier = Modifier.size(48.dp).clip(CircleShape),
+            shape = CircleShape,
+            color = acceptColor,
+            contentColor = acceptContentColor,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(22.dp))
+            }
+        }
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = Color(0xFF3E2723),
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Surface(
+            onClick = onReject,
+            modifier = Modifier.size(48.dp).clip(CircleShape),
+            shape = CircleShape,
+            color = rejectColor,
+            contentColor = rejectContentColor,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(22.dp))
             }
         }
     }

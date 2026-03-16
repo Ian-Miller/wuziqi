@@ -147,8 +147,17 @@ data class AppStrings(
     val drawOfferedText: String,
     val acceptDraw: String,
     val rejectDraw: String,
+    val drawSentWaiting: String,  // 我方求和等待回应
     val exitMatch: String,
     val exitMatchHint: String,
+    // ── 再来一局 ──────────────────────────────────────────────────────────────
+    val rematchRequest: String,
+    val rematchRequestSent: String,
+    val rematchOffered: (String) -> String,  // "{对方}请求再来一局，{对方}执{颜色}"
+    val rematchAccepted: String,
+    val rematchRejected: String,
+    val rematchTimeout: String,
+    val clickToRematch: String,
 
     // ── 游戏结束徽章 ──────────────────────────────────────────────────────────
     val resumeBadge: String,
@@ -382,11 +391,19 @@ val ZhStrings = AppStrings(
     confirmResignText = "认输后对局结束，将清除本地存档。",
     confirmResign = "确认认输",
     drawOfferedTitle = "对方求和",
-    drawOfferedText = "是否接受？平局后对局结束。",
+    drawOfferedText = "对方求和，是否接受？",
     acceptDraw = "接受和棋",
     rejectDraw = "拒绝",
+    drawSentWaiting = "等待求和回应…",
     exitMatch = "退出对局",
     exitMatchHint = "复盘后点此退出",
+    rematchRequest = "再来一局",
+    rematchRequestSent = "等待对方回应…",
+    rematchOffered = { color -> "再来一局？对方执$color" },
+    rematchAccepted = "对方已接受",
+    rematchRejected = "对方已拒绝",
+    rematchTimeout = "请求已超时",
+    clickToRematch = "点击选择先后手",
 
     resumeBadge = "续局",
 
@@ -629,11 +646,19 @@ val EnStrings = AppStrings(
     confirmResignText = "Resigning ends the game and clears the save.",
     confirmResign = "Confirm Resign",
     drawOfferedTitle = "Draw Offered",
-    drawOfferedText = "Accept a draw?",
+    drawOfferedText = "Draw offer — accept?",
     acceptDraw = "Accept",
     rejectDraw = "Decline",
+    drawSentWaiting = "Draw offer pending…",
     exitMatch = "Exit Match",
     exitMatchHint = "Review board then exit",
+    rematchRequest = "Rematch",
+    rematchRequestSent = "Waiting for opponent…",
+    rematchOffered = { color -> "Rematch? Opponent plays $color" },
+    rematchAccepted = "Opponent accepted",
+    rematchRejected = "Opponent declined",
+    rematchTimeout = "Request timed out",
+    clickToRematch = "Tap to pick side",
 
     resumeBadge = "Resume",
 

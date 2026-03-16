@@ -94,7 +94,11 @@ fun SinglePlayerGameHud(
     playerName: String? = null,
     onSelect: (() -> Unit)? = null, // Select action
     aiProgress: Float = 0f,
-    onPlayVictorySound: (() -> Unit)? = null // New callback
+    onPlayVictorySound: (() -> Unit)? = null, // New callback
+    selectionHint: String? = null, // 自定义选择提示文字（null 则使用 s.clickToStart）
+    /** 待回应请求的光圈颜色（null=无特殊光圈，非null优先于回合光圈）
+     *  示例：求和中=琥珀色，再来一局中=绿色 */
+    pendingGlowColor: Color? = null,
 ) {
     val s = LocalStrings.current
     // 旋转边框动画
@@ -114,19 +118,20 @@ fun SinglePlayerGameHud(
         modifier = modifier.rotate(if (rotate180) 180f else 0f),
         contentAlignment = Alignment.Center
     ) {
-        // 1. 背景层：旋转光圈 (仅在 Active 时显示)
-        // 使用 matchParentSize 随内容伸缩，并使用 .clip(CircleShape) 仅裁剪这一层的绘制范围，
-        // 而不裁剪整个父容器，从而允许前景文字在 transition 期间短暂溢出而不被切断。
-        if (isActive && gameStatus == GameStatus.PLAYING) {
+        // 1. 背景层：旋转光圈
+        // pendingGlowColor 优先（待回应请求）；其次是回合光圈（青色）；否则不显示
+        val effectiveGlowColor: Color? = pendingGlowColor
+            ?: if (isActive && gameStatus == GameStatus.PLAYING) Color(0xFF00E5FF) else null
+        if (effectiveGlowColor != null) {
              androidx.compose.foundation.Canvas(modifier = Modifier.matchParentSize().clip(CircleShape)) {
                   val maxDim = maxOf(size.width, size.height) * 1.5f
                   rotate(angle) {
                         drawRect(
                             brush = Brush.sweepGradient(
                                 listOf(
-                                     Color(0xFF00E5FF).copy(alpha = 0.0f),
-                                     Color(0xFF00E5FF).copy(alpha = 1.0f),
-                                     Color(0xFF00E5FF).copy(alpha = 0.0f),
+                                     effectiveGlowColor.copy(alpha = 0.0f),
+                                     effectiveGlowColor.copy(alpha = 1.0f),
+                                     effectiveGlowColor.copy(alpha = 0.0f),
                                 )
                             ),
                             topLeft = Offset((size.width - maxDim) / 2, (size.height - maxDim) / 2),
@@ -194,7 +199,7 @@ fun SinglePlayerGameHud(
                             )
                         }
                         Text(
-                            text = s.clickToStart,
+                            text = selectionHint ?: s.clickToStart,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                         )
@@ -221,7 +226,10 @@ fun SinglePlayerGameHud(
                         )
                         
                         if (gameStatus == GameStatus.PLAYING) {
-                            // 关键修正：确保 AnimatedStatusText 在 if/else 切换时保持同一个 Composable 实例
+                            // 状态文字: AI 思考中显示百分比进度（恢复之前去掉的调试可视化）
+                            val percentText = if (!isPlayer && isActive && aiProgress > 0.01f) {
+                                "${(aiProgress * 100).toInt()}%"
+                            } else null
                             val statusText = if (isActive) {
                                 if (isPlayer) {
                                     if (playerName != null) s.playerTurnFmt(playerName) else s.yourTurn
@@ -236,11 +244,20 @@ fun SinglePlayerGameHud(
                                 MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             }
 
-                            AnimatedStatusText(
-                                text = statusText,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = statusColor
-                            )
+                            if (percentText != null) {
+                                // 进度数字直接更新，不走动画，防止每帧触发 fade 闪动
+                                Text(
+                                    text = percentText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusColor,
+                                )
+                            } else {
+                                AnimatedStatusText(
+                                    text = statusText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusColor,
+                                )
+                            }
                         } else if (isWinner) {
                             AnimatedStatusText(
                                 text = s.win, 
@@ -405,10 +422,11 @@ fun PlayerAvatar(
     )
     val targetProgress = progress.coerceIn(0f, 1f)
     val isShowingProgress = !isPlayer && (isActive || targetProgress > 0f)
-    val glowColor = if (isActive && !isShowingProgress) {
-        MaterialTheme.colorScheme.primary.copy(alpha = alpha)
-    } else {
-        Color.Transparent
+    // 呈现相同形式的呼吸光晗：进度态用青色，回合态用主题色（紫色）
+    val glowColor = when {
+        isActive && isShowingProgress -> progressColor.copy(alpha = alpha)
+        isActive -> MaterialTheme.colorScheme.primary.copy(alpha = alpha)
+        else -> Color.Transparent
     }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -416,7 +434,7 @@ fun PlayerAvatar(
             modifier = Modifier
                 .size(42.dp)
                 .shadow(
-                    elevation = if (isActive && !isShowingProgress) 8.dp else 0.dp,
+                    elevation = if (isActive) 8.dp else 0.dp,
                     shape = CircleShape,
                     ambientColor = glowColor,
                     spotColor = glowColor
@@ -427,16 +445,15 @@ fun PlayerAvatar(
                     if (stroke <= 0f || borderColor == Color.Transparent) return@drawWithContent
 
                     if (isShowingProgress) {
+                        // 进度弧：从圆顶开始顺时针增长，无阈値确保从第一帧就平滑展示
                         val doneSweep = 360f * targetProgress
-                        if (doneSweep > 0.8f) {
-                            drawArc(
-                                color = progressColor,
-                                startAngle = -90f,
-                                sweepAngle = doneSweep,
-                                useCenter = false,
-                                style = Stroke(width = stroke, cap = StrokeCap.Round)
-                            )
-                        }
+                        drawArc(
+                            color = progressColor,
+                            startAngle = -90f,
+                            sweepAngle = doneSweep,
+                            useCenter = false,
+                            style = Stroke(width = stroke, cap = StrokeCap.Round)
+                        )
                     } else {
                         // 非进度态保持原有清晰边框
                         drawArc(

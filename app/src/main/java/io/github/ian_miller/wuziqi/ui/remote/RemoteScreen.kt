@@ -57,12 +57,7 @@ fun RemoteLobbyScreen(
         }
     }
 
-    // 对局已结束时自动重置到 Idle（防止大厅显示"继续/认输"按钮）
-    LaunchedEffect(state.phase, gameState?.isGameOver) {
-        if (state.phase is RemotePhase.Connected && gameState?.isGameOver == true) {
-            viewModel.reset()
-        }
-    }
+    // 对局结束后不再自动重置：允许再来一局流程，由用户手动退出或再开
 
     val woodBrush = remember {
         Brush.verticalGradient(colors = listOf(Color(0xFFE0C39E), Color(0xFFA47E5C)))
@@ -119,8 +114,17 @@ fun RemoteLobbyScreen(
                     RemoteConnectedLobbyContent(
                         phase = p,
                         lanConnected = lanConnected,
+                        gameOver = gameState?.isGameOver == true,
                         onResume = onNavigateToGame,
-                        onEnd = { viewModel.resignRemote(); viewModel.reset() },
+                        // 游戏结束时不认输，仅断开；进行中则先认输再退出
+                        onEnd = {
+                            if (gameState?.isGameOver == true) {
+                                viewModel.reset()
+                            } else {
+                                viewModel.resignRemote()
+                                viewModel.reset()
+                            }
+                        },
                     )
 
                 is RemotePhase.Error -> {
@@ -398,6 +402,7 @@ private fun RemoteLobbyContent(
 private fun RemoteConnectedLobbyContent(
     phase: RemotePhase.Connected,
     lanConnected: Boolean = true,
+    gameOver: Boolean = false,
     onResume: () -> Unit,
     onEnd: () -> Unit,
 ) {
@@ -408,14 +413,23 @@ private fun RemoteConnectedLobbyContent(
         verticalArrangement = Arrangement.Center,
     ) {
         Icon(
-            if (lanConnected) Icons.Default.CheckCircle else Icons.Default.WifiOff,
+            if (gameOver) Icons.Default.SportsScore
+            else if (lanConnected) Icons.Default.CheckCircle else Icons.Default.WifiOff,
             contentDescription = null,
             modifier = Modifier.size(64.dp),
-            tint = if (lanConnected) Color(0xFF4CAF50) else Color(0xFFFF9800),
+            tint = when {
+                gameOver -> Color(0xFF5D4037)
+                lanConnected -> Color(0xFF4CAF50)
+                else -> Color(0xFFFF9800)
+            },
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            if (lanConnected) s.remoteConnectedTitle else s.remoteGamePaused,
+            when {
+                gameOver -> s.statusGameOver
+                lanConnected -> s.remoteConnectedTitle
+                else -> s.remoteGamePaused
+            },
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = Color(0xFF3E2723),
@@ -426,7 +440,7 @@ private fun RemoteConnectedLobbyContent(
             style = MaterialTheme.typography.titleMedium,
             color = Color(0xFF5D4037),
         )
-        if (!lanConnected) {
+        if (!lanConnected && !gameOver) {
             Spacer(modifier = Modifier.height(8.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -441,6 +455,7 @@ private fun RemoteConnectedLobbyContent(
             }
         }
         Spacer(modifier = Modifier.height(32.dp))
+        // 继续/返回棋盘按钮
         Button(
             onClick = onResume,
             modifier = Modifier
@@ -452,11 +467,12 @@ private fun RemoteConnectedLobbyContent(
             ),
             shape = MaterialTheme.shapes.large,
         ) {
-            Icon(Icons.Default.PlayArrow, null)
+            Icon(if (gameOver) Icons.Default.Refresh else Icons.Default.PlayArrow, null)
             Spacer(modifier = Modifier.width(8.dp))
             Text(s.remoteResumeGame, style = MaterialTheme.typography.titleMedium)
         }
         Spacer(modifier = Modifier.height(12.dp))
+        // 结束按钮：游戏结束时仅退出（不认输），进行中则认输退出
         OutlinedButton(
             onClick = onEnd,
             modifier = Modifier
@@ -466,7 +482,12 @@ private fun RemoteConnectedLobbyContent(
             border = BorderStroke(1.5.dp, Color(0xFFB71C1C)),
             shape = MaterialTheme.shapes.large,
         ) {
-            Text(s.remoteForfeit, style = MaterialTheme.typography.titleMedium)
+            Text(
+                // 游戏已结束：显示"结束对局"（无认输含义）
+                // 游戏进行中：显示"结束对局（认输）"
+                if (gameOver) s.remoteEndGame else s.remoteForfeit,
+                style = MaterialTheme.typography.titleMedium,
+            )
         }
     }
 }
