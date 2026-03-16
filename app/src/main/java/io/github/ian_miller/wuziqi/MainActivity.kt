@@ -30,4 +30,14 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStart() {
+        super.onStart()
+        AppLifecycleState.isInForeground = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        AppLifecycleState.isInForeground = false
+    }
 }

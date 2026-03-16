@@ -1,8 +1,12 @@
 package io.github.ian_miller.wuziqi.ui.remote
 
 import android.content.Context
+import android.media.SoundPool
+import android.os.VibrationEffect
+import android.os.Vibrator
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.ian_miller.wuziqi.AppLifecycleState
 import io.github.ian_miller.wuziqi.domain.model.Board
 import io.github.ian_miller.wuziqi.domain.model.Piece
 import io.github.ian_miller.wuziqi.domain.model.PieceColor
@@ -131,6 +135,12 @@ class RemoteViewModel @Inject constructor(
     private val _vibrationEnabled = MutableStateFlow(gomokuPrefs.getBoolean("vibration_enabled", true))
     val vibrationEnabled: StateFlow<Boolean> = _vibrationEnabled.asStateFlow()
 
+    // 音效播放
+    private val soundPool = SoundPool.Builder().setMaxStreams(2).build()
+    private var moveSoundId: Int = 0
+    @Suppress("DEPRECATION")
+    private val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+
     private fun isRelayBlockedPermanently(): Boolean =
         prefs.getBoolean(KEY_RELAY_BLOCKED_PERMANENT, false)
 
@@ -156,6 +166,7 @@ class RemoteViewModel @Inject constructor(
             client.events.collect { event -> handleEvent(event) }
         }
         _state.update { it.copy(myPublicKey = keyPair.publicKeyHex) }
+        loadSoundEffects()
 
         // 恢复磁盘存档（应用重启或 ViewModel 重建后）
         loadGameFromDisk()?.let { saved ->
@@ -619,6 +630,7 @@ class RemoteViewModel @Inject constructor(
         )
         _gameState.value = newGs
         if (gameOver) clearSavedGame() else saveGameToDisk(newGs)
+        playMoveSound(); triggerVibration()
         val msg = GameMsg(MsgType.MOVE, gameId = gs.gameId, seq = seq, row = row, col = col)
         lanBridge?.send(msg)
         sendNostrGameMsg(msg)
@@ -709,6 +721,7 @@ class RemoteViewModel @Inject constructor(
                 )
                 _gameState.value = newGs
                 if (gameOver) clearSavedGame() else saveGameToDisk(newGs)
+                playMoveSound(); triggerVibration()
             }
             MsgType.RESIGN -> {
                 _gameState.update { it?.copy(winner = gs.myColor, isGameOver = true) }
@@ -730,6 +743,31 @@ class RemoteViewModel @Inject constructor(
             MsgType.RESYNC -> rebuildFromResync(msg)
             else -> Unit
         }
+    // ========================================================================
+    // 音效和震动
+    // ========================================================================
+
+    private fun loadSoundEffects() {
+        try {
+            val resId = context.resources.getIdentifier("place_piece", "raw", context.packageName)
+            if (resId != 0) moveSoundId = soundPool.load(context, resId, 1)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun playMoveSound() {
+        if (!AppLifecycleState.isInForeground) return
+        if (!_soundEnabled.value || moveSoundId == 0) return
+        try {
+            soundPool.play(moveSoundId, 1f, 1f, 1, 0, 1f)
+        } catch (e: Exception) {}
+    }
+
+    private fun triggerVibration() {
+        if (!AppLifecycleState.isInForeground) return
+        if (!_vibrationEnabled.value) return
+        vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
     }
 
     // ── 胜负判断 ───────────────────────────────────────────────────────────────
@@ -850,5 +888,6 @@ class RemoteViewModel @Inject constructor(
         reconnectJob?.cancel()
         lanBridge?.close()
         client.disconnect()
+        soundPool.release()
     }
 }

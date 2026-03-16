@@ -454,11 +454,15 @@ impl GomokuAi {
     fn choose_turn_time_budget(&self, board: &Board) -> u64 {
         let base = self.config.time_limit_ms;
 
-        // 仅对 MASTER 做开局预算下调（HARD 及以下保持原配置）
+        // MASTER 专属开局时间压缩。
+        // move_count 0-6 已由开局库即时覆盖，minimax 只在 move_count 7+ 才启动。
+        // move_count 7-14（中前期）：6s 足以搜到深度 10+
+        // move_count 15-24（中盘）：9s
+        // move_count 25+（残局）：满预算
         if self.config.max_depth >= 20 {
             match board.move_count {
-                0..=4 => base.min(4_000), // 你的场景：总第4手（AI第2手）
-                5..=8 => base.min(7_000),
+                7..=14  => base.min(6_000),
+                15..=24 => base.min(9_000),
                 _ => base,
             }
         } else {
@@ -471,29 +475,90 @@ impl GomokuAi {
     // =========================================================================
 
     fn opening_book(&self, board: &Board) -> Option<(usize, usize)> {
+        const C: usize = 7;
         match board.move_count {
-            0 => Some(OPENING_CENTER),
+            // 空棋盘：必走中心
+            0 => Some((C, C)),
+            // 1 子：中心空则占中，否则走最近的好邻格
             1 => {
-                if board.is_empty(OPENING_CENTER.0, OPENING_CENTER.1) {
-                    Some(OPENING_CENTER)
+                if board.is_empty(C, C) {
+                    Some((C, C))
                 } else {
-                    let candidates = [
-                        (6, 7), (8, 7), (7, 6), (7, 8),
-                        (6, 6), (8, 8), (6, 8), (8, 6),
-                        (5, 7), (9, 7), (7, 5), (7, 9),
-                    ];
-                    candidates.iter().find(|&&p| board.is_empty(p.0, p.1)).copied()
+                    // 直邻 > 斜邻 > 稍远直邻
+                    [(C, C-1), (C, C+1), (C-1, C), (C+1, C),
+                     (C-1, C-1), (C+1, C+1), (C-1, C+1), (C+1, C-1),
+                     (C, C-2), (C, C+2), (C-2, C), (C+2, C)]
+                        .iter()
+                        .find(|&&p| board.is_empty(p.0, p.1))
+                        .copied()
                 }
             }
-            2 => {
-                let near = [
-                    (7, 7), (6, 7), (8, 7), (7, 6), (7, 8),
-                    (6, 6), (8, 8), (6, 8), (8, 6),
-                ];
-                near.iter().find(|&&p| board.is_empty(p.0, p.1)).copied()
-            }
+            // 2-6 子（AI 第 2~3 手）：快速启发选点，不启动搜索
+            2..=6 => self.opening_book_fast(board),
             _ => None,
         }
+    }
+
+    /// 开局快速落点（move_count 2~6，O(n) 无搜索）。
+    ///
+    /// 策略：
+    /// 1. 只考虑距中心切比雪夫距离 ≤ 5 的候选格（2..=12 范围）
+    /// 2. 评估分优先（识别现有棋型，如活二、连线）
+    /// 3. 靠近己方已有棋子（延续己方棋形）
+    /// 4. 靠近中心（中心控制）
+    fn opening_book_fast(&self, board: &Board) -> Option<(usize, usize)> {
+        const C: i32 = 7;
+        const MAX_CENTER_DIST: i32 = 5;
+        let player = self.config.player;
+
+        // 收集己方棋子（开局极少，O(1) 近似）
+        let mut my_pieces: Vec<(i32, i32)> = Vec::new();
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                if board.get(r, c) == player {
+                    my_pieces.push((r as i32, c as i32));
+                }
+            }
+        }
+
+        let candidates = board.generate_moves();
+        let mut best: Option<(usize, usize)> = None;
+        let mut best_score: i64 = i64::MIN;
+
+        for &(r, c) in &candidates {
+            let ri = r as i32;
+            let ci = c as i32;
+            let center_d = (ri - C).abs().max((ci - C).abs());
+            if center_d > MAX_CENTER_DIST {
+                continue;
+            }
+
+            // 与己方棋子的最近切比雪夫距离（越小越好，代表延续己方结构）
+            let my_d: i64 = if my_pieces.is_empty() {
+                0
+            } else {
+                my_pieces
+                    .iter()
+                    .map(|&(pr, pc)| (ri - pr).abs().max((ci - pc).abs()))
+                    .min()
+                    .unwrap_or(10) as i64
+            };
+
+            // 战术评估分（活二/隔活三等）
+            let eval = evaluate_position(board, r, c, player) as i64;
+
+            // 综合评分：eval 优先，其次紧靠己方，再次靠近中心
+            let score = eval * 1_000
+                + (10 - my_d).max(0) * 80
+                + (8 - center_d as i64).max(0) * 30;
+
+            if score > best_score {
+                best_score = score;
+                best = Some((r, c));
+            }
+        }
+
+        best
     }
 
     // =========================================================================

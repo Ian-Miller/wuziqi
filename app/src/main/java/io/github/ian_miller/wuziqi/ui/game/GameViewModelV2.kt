@@ -16,6 +16,7 @@ import io.github.ian_miller.wuziqi.domain.model.Piece
 import io.github.ian_miller.wuziqi.domain.model.PieceColor
 import io.github.ian_miller.wuziqi.domain.repository.GameRepository
 import io.github.ian_miller.wuziqi.ai.RustAi
+import io.github.ian_miller.wuziqi.AppLifecycleState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -1270,6 +1271,7 @@ class GameViewModelV2 @Inject constructor(
     }
     
     private fun playMoveSound() {
+        if (!AppLifecycleState.isInForeground) return
         val settings = getSettings()
         if (!settings.soundEnabled || moveSoundId == 0) return
         try {
@@ -1278,6 +1280,7 @@ class GameViewModelV2 @Inject constructor(
     }
     
     fun playStampSound() {
+        if (!AppLifecycleState.isInForeground) return
         val settings = getSettings()
         if (!settings.soundEnabled || stampSoundId == 0) return
         try {
@@ -1286,6 +1289,7 @@ class GameViewModelV2 @Inject constructor(
     }
     
     private fun triggerVibration() {
+        if (!AppLifecycleState.isInForeground) return
         val settings = getSettings()
         if (!settings.vibrationEnabled) return
 
