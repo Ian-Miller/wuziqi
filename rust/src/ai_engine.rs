@@ -836,51 +836,23 @@ impl GomokuAi {
         // 安全回退：走法已按启发分排序，第一个总是合理的
         let mut best_move = moves[0];
 
-        // 智能初始深度：根据历史、时间限制和局面复杂度综合决定
-        let start_depth = self.choose_start_depth(board, moves.len());
-
         // 跟踪上一层耗时（估算下一层用）
-        let mut last_layer_ms: u64 = self.last_depth_time_ms.max(1);
+        let mut last_layer_ms: u64 = 1;
 
         // 初始 Zobrist 哈希
         let root_hash = self.zobrist.hash_board(board);
 
-        // ── 阶段 1：锚定搜索 ──────────────────────────────────────────────
-        // 若起始深度 > 2，先在深度 2 做一次快速搜索作为安全回退。
-        if start_depth > 2 && self.time_ok() {
-            let t = self.start_time.elapsed().as_millis() as u64;
-            let (d_best, done, win, root_score) =
-                self.search_one_depth(
-                    board,
-                    moves,
-                    2,
-                    best_move,
-                    root_hash,
-                    i32::MIN + 1,
-                    i32::MAX - 1,
-                    on_progress,
-                    last_report_ms,
-                    last_report_percent,
-                );
-            if done {
-                best_move = d_best;
-                self.last_root_score = root_score;
-                last_layer_ms = (self.start_time.elapsed().as_millis() as u64 - t).max(1);
-                if win {
-                    return best_move;
-                }
-            }
-        }
-
-        // ── 阶段 2：主迭代加深 ───────────────────────────────────────────
-        let mut current_depth = start_depth;
+        // 标准迭代加深，始终从深度 1 出发。
+        // 浅层搜索代价极小（节点数指数递减），但能填充置换表，为深层提供良好的走法排序，
+        // 从而显著改善 Alpha-Beta 剪枝效率。跳过浅层等同于让深层搜索带着冷 TT 工作。
+        let mut current_depth = 1;
 
         loop {
             if current_depth > self.config.max_depth || !self.time_ok() {
                 break;
             }
 
-            if current_depth > start_depth && !self.can_afford_depth(last_layer_ms) {
+            if current_depth > 1 && !self.can_afford_depth(last_layer_ms) {
                 break;
             }
 
@@ -1008,15 +980,7 @@ impl GomokuAi {
                     1
                 };
             } else {
-                if current_depth == start_depth && start_depth > 4 && self.time_ok() {
-                    let fallback_depth = (start_depth / 2).max(3);
-                    if fallback_depth < current_depth {
-                        self.last_completed_depth =
-                            (self.last_completed_depth - 2).max(0);
-                        current_depth = fallback_depth;
-                        continue;
-                    }
-                }
+                // 当前深度超时未完成，以上一深度的结果为最终答案
                 break;
             }
         }
@@ -1178,55 +1142,6 @@ impl GomokuAi {
 
     /// 根据历史、时间限制和当前局面综合决定初始搜索深度。
     ///
-    /// 考虑因素：
-    /// 1. 历史完成深度（上一回合）：避免从深度 1 重新扫描无意义的浅层
-    /// 2. 时间限制：时间越长，起始深度可以越高
-    /// 3. 候选走法数量：候选越少（局面简单），可以起步更深
-    /// 4. 棋盘落子数量：棋局早期候选区域小，也可以起步更深
-    fn choose_start_depth(&self, board: &Board, candidate_count: usize) -> i32 {
-        let max = self.config.max_depth;
-        let total_pieces = board.move_count;
-
-        // 基于历史：从上一回合完成深度的一半开始（跳过已知的浅层）
-        let hist_base = if self.last_completed_depth >= 4 {
-            self.last_completed_depth / 2
-        } else {
-            0
-        };
-
-        // 基于时间限制
-        let time_base = if self.turn_time_limit_ms >= 8000 {
-            4 // 8 秒+：从深度 4 开始
-        } else if self.turn_time_limit_ms >= 3000 {
-            3 // 3–8 秒：从深度 3 开始
-        } else if self.turn_time_limit_ms >= 1000 {
-            2 // 1–3 秒：从深度 2 开始
-        } else {
-            1 // < 1 秒：从深度 1 开始
-        };
-
-        // 基于候选走法数量：候选少时可以起步更深
-        let cand_bonus: i32 = if candidate_count <= 3 {
-            2
-        } else if candidate_count <= 8 {
-            1
-        } else {
-            0
-        };
-
-        // 基于棋盘落子数：棋局早期棋盘稀疏，候选范围小，可以起步更深
-        let piece_bonus: i32 = if total_pieces < 6 {
-            1
-        } else {
-            0
-        };
-
-        // 综合：取历史和时间基准的较大值，加上局面加成
-        // 不超过 max_depth 的 2/3（留出迭代空间），至少为 1
-        let start = hist_base.max(time_base) + cand_bonus + piece_bonus;
-        start.clamp(1, (max * 2 / 3).max(1))
-    }
-
     // =========================================================================
     // 时间预估
     // =========================================================================
