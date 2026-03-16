@@ -184,11 +184,12 @@ fun RemoteGameScreen(
                     // 缓存再来一局颜色，防止退出动画期间 rematchOfferedColor 变 null 导致内容闪变
                     var lastSeenRematchColor by remember { mutableStateOf(PieceColor.BLACK) }
                     gameState.rematchOfferedColor?.let { lastSeenRematchColor = it }
-                    // 推导当前操作行状态（优先级：对方请求 > 认输确认 > 按钮 > 游戏结束占位）
+                    // 推导当前操作行状态（优先级：再来一局请求 > 游戏结束占位 > 求和请求 > 认输确认 > 按钮）
+                    // 注意：rematchOfferedColor 在 isGameOver=true 时才到达，必须先于 Idle 判断
                     val inlineAction: InlineAction = when {
+                        gameState.rematchOfferedColor != null -> InlineAction.IncomingRematch
                         gameState.isGameOver -> InlineAction.Idle
                         gameState.drawOfferedByOpponent -> InlineAction.IncomingDraw
-                        gameState.rematchOfferedColor != null -> InlineAction.IncomingRematch
                         confirmResign -> InlineAction.ResignConfirm
                         else -> InlineAction.Buttons
                     }
