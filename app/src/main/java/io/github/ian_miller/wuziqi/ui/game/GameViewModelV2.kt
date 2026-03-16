@@ -313,6 +313,7 @@ class GameViewModelV2 @Inject constructor(
     // AI 任务
     private var aiJob: Job? = null
     private var assistJob: Job? = null
+    private var assistAi: RustAi? = null  // 提升至成员，供 cancelAssistJob 调用 invalidate()
     private var delayJob: Job? = null  // 轮次切换延迟任务
     private var toastJob: Job? = null  // 难度 Toast 定时器（可取消重置）
 
@@ -1535,7 +1536,9 @@ class GameViewModelV2 @Inject constructor(
                     timeLimitMs = 12_000,
                     player = if (currentColor == PieceColor.BLACK) 1 else 2
                 ) ?: return@launch
+                assistAi = ai  // 注册到成员，使 cancelAssistJob 能协作式通知 Rust 侧停止
                 val move = ai.takeTurn(boardSnapshot)
+                assistAi = null
                 ai.destroy()
                 // isActive 检查：若 assistJob 在 JNI 计算期间被 cancel（阻塞调用无法中断），
                 // 此处拦截，避免将过期局面的提示发送给 actor。
@@ -1543,8 +1546,12 @@ class GameViewModelV2 @Inject constructor(
                     sendCommand(Cmd.AssistReady(move))
                 }
             } catch (e: Exception) {
-                // CancellationException（用户落子）会被静默忽略
+                // CancellationException（用户落子/撤销）会被静默忽略
                 if (e !is kotlinx.coroutines.CancellationException) e.printStackTrace()
+            } finally {
+                // 确保无论正常结束还是取消，都清理成员引用并销毁 AI 实例
+                assistAi?.destroy()
+                assistAi = null
             }
         }
     }
@@ -1564,7 +1571,13 @@ class GameViewModelV2 @Inject constructor(
     private fun destroyAi() { rustAi?.destroy(); rustAi = null; progressTracker.cancel() }
     private fun invalidateAndDestroyAi() { invalidateAi(); destroyAi() }
     private fun cancelAiJob() { aiJob?.cancel(); aiJob = null; progressTracker.cancel() }
-    private fun cancelAssistJob() { assistJob?.cancel(); assistJob = null }
+    private fun cancelAssistJob() {
+        // 先通知 Rust 侧停止（协作式取消）：即使 JNI 阻塞也能尽早跳出搜索循环
+        assistAi?.invalidate()
+        assistJob?.cancel()
+        assistJob = null
+        // assistAi 由协程 finally 块负责 destroy + 清空
+    }
     private fun cancelDelayJob() { delayJob?.cancel(); delayJob = null }
     
     // ========================================================================
