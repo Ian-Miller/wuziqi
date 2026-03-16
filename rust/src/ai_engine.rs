@@ -30,6 +30,13 @@ const FAST_JUMP_RATIO: u64 = 8;
 /// 剩余时间 >= 上一层耗时 * AFFORD_RATIO 才认为值得继续
 const AFFORD_RATIO: u64 = 3;
 
+/// VCF（连续冲四取胜）搜索最大层数
+/// 每"轮"消耗 2 层（己方冲四 + 对方强制应手），所以：
+///   HARD(10)  = 最多 5 次连续冲四序列
+///   MASTER(20) = 最多 10 次连续冲四序列（可发现极长的强制路线）
+const VCF_DEPTH_HARD: i32 = 10;
+const VCF_DEPTH_MASTER: i32 = 20;
+
 /// 根节点 Aspiration Window 参数
 const ASPIRATION_MARGIN_BASE: i32 = 1_200;
 const ASPIRATION_MARGIN_STEP: i32 = 2_000;
@@ -369,6 +376,30 @@ impl GomokuAi {
             }
         }
 
+        // 3.6 VCF（连续冲四取胜）专项搜索
+        // • HARD  (depth≥12)：仅攻击，深度 VCF_DEPTH_HARD（约 5 次连续冲四）
+        // • MASTER(depth≥20)：攻击 + 防守对方 VCF，深度 VCF_DEPTH_MASTER（约 10 层）
+        // 此步在 find_critical_block 已排除"立即一步胜/必须立刻封堵"后运行；
+        // 专门处理需要 3+ 步才能兑现的冲四链，minimax 在时间压力下未必能搜到。
+        if self.config.max_depth >= 12 && self.time_ok() {
+            let vcf_depth = if self.config.max_depth >= 20 {
+                VCF_DEPTH_MASTER
+            } else {
+                VCF_DEPTH_HARD
+            };
+            if let Some(m) = self.vcf_search(&mut board.clone(), self.config.player, vcf_depth) {
+                self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                return Some(m);
+            }
+            // MASTER 专属：检测并阻断对方的 VCF 路线
+            if self.config.max_depth >= 20 && self.time_ok() {
+                if let Some(m) = self.vcf_defense(&mut board.clone(), self.config.player, vcf_depth) {
+                    self.maybe_report_progress(on_progress, 100, &mut last_report_ms, &mut last_report_percent, true);
+                    return Some(m);
+                }
+            }
+        }
+
         // 4. 迭代加深搜索（含智能深度选择 + 杀棋检测）
         let mv = self.iterative_deepening(
             board,
@@ -642,6 +673,152 @@ impl GomokuAi {
             })
             .max_by_key(|&(_, s)| s)
             .map(|((r, c), _)| (r, c))
+    }
+
+    // =========================================================================
+    // VCF（Victory by Continuous Fours）专项搜索
+    // =========================================================================
+
+    /// VCF 攻击搜索：尝试通过"连续冲四"强制对手响应，最终赢棋。
+    ///
+    /// 算法核心：
+    /// 1. 只展开"落子后形成四连（冲四）"的手（极低分支因子，通常 1-4）
+    /// 2. 若落子后立即五连 → 当前局面 VCF 成功
+    /// 3. 若当前局面有 ≥2 个成五威胁格 → 对手无法全部封堵 → VCF 成功
+    /// 4. 若只有 1 个威胁格 → 对手必须在此格应手（强制应答）
+    ///    - 若对手此时有自己的立即五连 → 对手会赢，此分支 VCF 失败
+    ///    - 否则对手被迫应手，深度减 2 后继续搜索
+    /// 5. 协作取消：每次递归检查 should_stop 和时间预算
+    ///
+    /// `depth`：剩余"双方各一步"预算（depth=10 → 最多 5 次冲四）。
+    /// 返回根处的落子坐标（外层调用），内层递归仅返回 bool（以 Option::is_some 判断）。
+    fn vcf_search(
+        &self,
+        board: &mut Board,
+        player: Color,
+        depth: i32,
+    ) -> Option<(usize, usize)> {
+        self.vcf_search_inner(board, player, depth)
+    }
+
+    /// 内部递归实现。每一层通知：我方落子坐标（根层有意义），or None 表示此分支无 VCF。
+    fn vcf_search_inner(
+        &self,
+        board: &mut Board,
+        player: Color,
+        depth: i32,
+    ) -> Option<(usize, usize)> {
+        if depth <= 0 {
+            return None;
+        }
+        if !self.time_ok() {
+            return None;
+        }
+
+        let opp = player.opponent();
+
+        // 枚举所有"落子后形成四连"的候选手（冲四格）
+        let candidates: Vec<(usize, usize)> = board
+            .generate_moves()
+            .into_iter()
+            .filter(|&(r, c)| is_real_four_threat_if_placed(board, r, c, player))
+            .collect();
+
+        for (ar, ac) in candidates {
+            if !board.place(ar, ac, player) {
+                continue;
+            }
+
+            // ── 情形 A：落子直接五连 ──────────────────────────────────────
+            if board.check_win(ar, ac, player) {
+                board.unplace(ar, ac);
+                return Some((ar, ac));
+            }
+
+            // ── 枚举落子后的"成五威胁格"（对手必须封堵的格） ───────────────
+            let threats = vcf_win_threats(board, player);
+
+            if threats.is_empty() {
+                // 没有成五威胁，无法构成连续冲四
+                board.unplace(ar, ac);
+                continue;
+            }
+
+            // ── 情形 B：双重威胁（≥2 个威胁格）→ 对手无法同时封堵 ────────
+            if threats.len() >= 2 {
+                board.unplace(ar, ac);
+                return Some((ar, ac));
+            }
+
+            // ── 情形 C：单一威胁，对手被迫应手 ──────────────────────────
+            // 检查对手此时是否有自己的"立即五连"（如果有，对手会直接赢，VCF 失败）
+            let opp_wins_now = board.generate_moves().into_iter().any(|(r, c)| {
+                if !board.place(r, c, opp) {
+                    return false;
+                }
+                let win = board.check_win(r, c, opp);
+                board.unplace(r, c);
+                win
+            });
+
+            if opp_wins_now {
+                board.unplace(ar, ac);
+                continue; // 此分支 VCF 失败
+            }
+
+            // 对手被迫应手，在 threats[0] 封堵
+            let (br, bc) = threats[0];
+            if !board.place(br, bc, opp) {
+                board.unplace(ar, ac);
+                continue;
+            }
+
+            // 递归（深度减 2：我方 + 对手各一步）
+            let success = self.vcf_search_inner(board, player, depth - 2).is_some();
+
+            board.unplace(br, bc);
+            board.unplace(ar, ac);
+
+            if success {
+                return Some((ar, ac));
+            }
+        }
+
+        None
+    }
+
+    /// VCF 防守搜索（MASTER 专属）：
+    /// 当对手存在 VCF 路线时，找一步让对手 VCF 失效的防守手。
+    fn vcf_defense(
+        &self,
+        board: &mut Board,
+        player: Color,
+        opp_vcf_depth: i32,
+    ) -> Option<(usize, usize)> {
+        let opp = player.opponent();
+
+        // 先确认对手是否真的有 VCF 威胁（避免做无谓枚举）
+        let opp_has_vcf = self.vcf_search_inner(board, opp, opp_vcf_depth).is_some();
+        if !opp_has_vcf {
+            return None;
+        }
+
+        for (mr, mc) in board.generate_moves() {
+            if !self.time_ok() {
+                break;
+            }
+            if !board.place(mr, mc, player) {
+                continue;
+            }
+            // 若我方落子后对手的 VCF 消失，则此手有效
+            let still_vcf = self.vcf_search_inner(board, opp, opp_vcf_depth - 2).is_some();
+            board.unplace(mr, mc);
+            if !still_vcf {
+                return Some((mr, mc));
+            }
+        }
+
+        None
     }
 
     // =========================================================================
@@ -1653,4 +1830,41 @@ fn is_real_four_threat(board: &Board, row: usize, col: usize, color: Color) -> b
         }
     }
     false
+}
+
+/// 枚举当前局面中 `player` 的所有"成五威胁格"：
+/// 即落子后立即形成五连的空格。VCF 搜索用来判断对手是否需要封堵。
+fn vcf_win_threats(board: &Board, player: Color) -> Vec<(usize, usize)> {
+    board
+        .generate_moves()
+        .into_iter()
+        .filter(|&(r, c)| {
+            // 临时落子、检查五连、立即撤销
+            let mut b = board.clone();
+            b.place(r, c, player) && b.check_win(r, c, player)
+        })
+        .collect()
+}
+
+/// 判断若 `player` 在 `(row, col)` 落子，落子后是否构成"冲四"（四连，至少一端开放）。
+/// 与 `is_real_four_threat` 不同之处在于：此函数先临时落子，再在已落子的棋盘上检测。
+fn is_real_four_threat_if_placed(
+    board: &Board,
+    row: usize,
+    col: usize,
+    color: Color,
+) -> bool {
+    // 只在空格上操作
+    if board.get(row, col) != Color::Empty {
+        return false;
+    }
+    // 如果落子后直接五连，跳过（VCF 搜索中该情况由 check_win 单独处理）
+    let mut b = board.clone();
+    if !b.place(row, col, color) {
+        return false;
+    }
+    if b.check_win(row, col, color) {
+        return false; // 直接五连不算"冲四"，由上层单独处理
+    }
+    is_real_four_threat(&b, row, col, color)
 }
