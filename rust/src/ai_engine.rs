@@ -455,12 +455,14 @@ impl GomokuAi {
         let base = self.config.time_limit_ms;
 
         // MASTER 专属开局时间压缩。
-        // move_count 0-6 已由开局库即时覆盖，minimax 只在 move_count 7+ 才启动。
+        // move_count 0-4 由开局库即时覆盖，minimax 从 move_count 5+ 才启动。
+        // move_count 5-6（6 子内，棋盘稀疏，搜索快）：2s 足够收敛到深度 15+
         // move_count 7-14（中前期）：6s 足以搜到深度 10+
         // move_count 15-24（中盘）：9s
         // move_count 25+（残局）：满预算
         if self.config.max_depth >= 20 {
             match board.move_count {
+                5..=6   => base.min(2_000),
                 7..=14  => base.min(6_000),
                 15..=24 => base.min(9_000),
                 _ => base,
@@ -493,8 +495,8 @@ impl GomokuAi {
                         .copied()
                 }
             }
-            // 2-6 子（AI 第 2~3 手）：快速启发选点，不启动搜索
-            2..=6 => self.opening_book_fast(board),
+            // 2-4 子（AI 第 2~3 手，棋盘极空旷）：快速启发选点，不启动搜索
+            2..=4 => self.opening_book_fast(board),
             _ => None,
         }
     }
