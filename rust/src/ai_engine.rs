@@ -502,14 +502,27 @@ impl GomokuAi {
     /// 开局快速落点（move_count 2~6，O(n) 无搜索）。
     ///
     /// 策略：
-    /// 1. 只考虑距中心切比雪夫距离 ≤ 5 的候选格（2..=12 范围）
-    /// 2. 评估分优先（识别现有棋型，如活二、连线）
+    /// 1. 若对手有冲四以上威胁（≥ SCORE_BLOCKED_FOUR），退出开局库，交给完整搜索处理
+    /// 2. 攻守兼顾：eval = attack + defense * 9/10（与 heuristic_score 一致）
     /// 3. 靠近己方已有棋子（延续己方棋形）
     /// 4. 靠近中心（中心控制）
+    /// 5. 只考虑距中心切比雪夫距离 ≤ 5 的候选格
     fn opening_book_fast(&self, board: &Board) -> Option<(usize, usize)> {
         const C: i32 = 7;
         const MAX_CENTER_DIST: i32 = 5;
         let player = self.config.player;
+        let opponent = player.opponent();
+
+        let candidates = board.generate_moves();
+
+        // 第一遍：紧急威胁检测。
+        // 若对手在任意候选位有冲四以上威胁（≥ SCORE_BLOCKED_FOUR），
+        // 开局库无法正确应对，退出并让完整搜索处理。
+        for &(r, c) in &candidates {
+            if evaluate_position(board, r, c, opponent) >= SCORE_BLOCKED_FOUR {
+                return None;
+            }
+        }
 
         // 收集己方棋子（开局极少，O(1) 近似）
         let mut my_pieces: Vec<(i32, i32)> = Vec::new();
@@ -521,7 +534,6 @@ impl GomokuAi {
             }
         }
 
-        let candidates = board.generate_moves();
         let mut best: Option<(usize, usize)> = None;
         let mut best_score: i64 = i64::MIN;
 
@@ -544,8 +556,10 @@ impl GomokuAi {
                     .unwrap_or(10) as i64
             };
 
-            // 战术评估分（活二/隔活三等）
-            let eval = evaluate_position(board, r, c, player) as i64;
+            // 攻守兼顾（与 heuristic_score 一致：进攻全值 + 防守 9/10）
+            let attack  = evaluate_position(board, r, c, player) as i64;
+            let defense = evaluate_position(board, r, c, opponent) as i64;
+            let eval = attack + defense * 9 / 10;
 
             // 综合评分：eval 优先，其次紧靠己方，再次靠近中心
             let score = eval * 1_000
