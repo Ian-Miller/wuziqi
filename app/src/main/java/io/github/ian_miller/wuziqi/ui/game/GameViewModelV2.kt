@@ -183,7 +183,7 @@ class GameViewModelV2 @Inject constructor(
         data class PlacePiece(val row: Int, val col: Int) : Cmd()
         object Undo : Cmd()
         data class AiDone(val piece: Piece) : Cmd()
-        data class AssistReady(val move: Pair<Int, Int>) : Cmd()
+        data class AssistReady(val move: Pair<Int, Int>, val expectedMoveCount: Int) : Cmd()
         
         // 设置更新（游戏中也可修改，影响下一局）
         data class UpdateSettings(val settings: GameSettings) : Cmd()
@@ -425,10 +425,14 @@ class GameViewModelV2 @Inject constructor(
                     pvpBottomIsBlack = state.pvpBottomIsBlack
                 )
             }
-            is Cmd.AssistReady -> state.copy(
-                aiHint = cmd.move,
-                isCalculatingHint = false
-            )
+            is Cmd.AssistReady -> {
+                // 校验步数：若 Undo/落子 导致盘面步数已变，丢弃过期结果
+                if (state.moveHistory.size == cmd.expectedMoveCount) {
+                    state.copy(aiHint = cmd.move, isCalculatingHint = false)
+                } else {
+                    state  // 过期结果，静默丢弃
+                }
+            }
             else -> state
         }
         
@@ -1524,6 +1528,7 @@ class GameViewModelV2 @Inject constructor(
     private fun launchAssistCalculation(state: State.WaitingForPlayer) {
         cancelAssistJob()
         val currentColor = state.currentPlayer
+        val expectedMoveCount = state.moveHistory.size  // 用于校验：结果返回时步数若已变则丢弃
         // 预先捕获棋盘快照，避免协程延迟期间状态被修改
         val boardSnapshot = state.board.toByteArray()
         assistJob = viewModelScope.launch(Dispatchers.Default) {
@@ -1543,7 +1548,7 @@ class GameViewModelV2 @Inject constructor(
                 // isActive 检查：若 assistJob 在 JNI 计算期间被 cancel（阻塞调用无法中断），
                 // 此处拦截，避免将过期局面的提示发送给 actor。
                 if (move != null && isActive) {
-                    sendCommand(Cmd.AssistReady(move))
+                    sendCommand(Cmd.AssistReady(move, expectedMoveCount))
                 }
             } catch (e: Exception) {
                 // CancellationException（用户落子/撤销）会被静默忽略
