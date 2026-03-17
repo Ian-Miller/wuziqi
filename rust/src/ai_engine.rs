@@ -648,20 +648,123 @@ impl GomokuAi {
             }
         }
 
-        let threat_penalty = when_threat_penalty(opp_best_threat);
+        let (high_weight, mid_weight, follow_divisor) = if board.move_count <= 14 {
+            (2_400, 1_100, 16)
+        } else if board.move_count <= 40 {
+            (3_200, 950, 12)
+        } else {
+            (4_000, 900, 10)
+        };
 
-        high_threat_count * 4_000 + mid_threat_count * 900 + best_follow / 10 - threat_penalty
+        let shape_bonus = self.local_shape_bonus_after_placed(&b, row, col, self.config.player);
+        let threat_penalty = when_threat_penalty(opp_best_threat, board.move_count);
+
+        high_threat_count * high_weight
+            + mid_threat_count * mid_weight
+            + best_follow / follow_divisor
+            + shape_bonus
+            - threat_penalty
     }
 
     fn move_tactical_score(&self, board: &Board, row: usize, col: usize, player: Color) -> i32 {
         let attack = evaluate_position(board, row, col, player);
         let defense = evaluate_position(board, row, col, player.opponent());
-        let defense_weighted = if defense >= SCORE_BLOCKED_FOUR {
-            defense
+        let move_count = board.move_count;
+
+        let attack_weighted = if move_count <= 14 && attack >= SCORE_BLOCKED_FOUR && attack < SCORE_FOUR {
+            // 开局阶段降低“单向冲四执念”，给布局型着法更多排序空间。
+            attack * 92 / 100
         } else {
-            defense * 9 / 10
+            attack
         };
-        attack + defense_weighted
+
+        let defense_weighted = if defense >= SCORE_FOUR {
+            defense * 11 / 10
+        } else if defense >= DOUBLE_THREAT_THRESHOLD {
+            defense * 105 / 100
+        } else if defense >= SCORE_BLOCKED_FOUR {
+            if move_count <= 14 { defense * 95 / 100 } else { defense }
+        } else if defense >= SCORE_THREE {
+            if move_count <= 14 {
+                defense * 78 / 100
+            } else if move_count <= 40 {
+                defense * 88 / 100
+            } else {
+                defense * 95 / 100
+            }
+        } else if move_count <= 14 {
+            defense * 65 / 100
+        } else {
+            defense * 75 / 100
+        };
+
+        attack_weighted + defense_weighted
+    }
+
+    fn local_shape_bonus_after_placed(&self, board: &Board, row: usize, col: usize, player: Color) -> i32 {
+        let dirs = [(0i32, 1i32), (1, 0), (1, 1), (1, -1)];
+        let mut bonus = 0i32;
+        let mut open_two_dirs = 0i32;
+        let mut open_three_dirs = 0i32;
+        let mut isolated_forcing_dirs = 0i32;
+
+        for &(dr, dc) in &dirs {
+            let mut count = 1i32;
+
+            let (mut r, mut c) = (row as i32 + dr, col as i32 + dc);
+            while r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32
+                && board.get(r as usize, c as usize) == player
+            {
+                count += 1;
+                r += dr;
+                c += dc;
+            }
+            let right_open = r >= 0 && r < BOARD_SIZE as i32
+                && c >= 0 && c < BOARD_SIZE as i32
+                && board.get(r as usize, c as usize) == Color::Empty;
+
+            let (mut r, mut c) = (row as i32 - dr, col as i32 - dc);
+            while r >= 0 && r < BOARD_SIZE as i32 && c >= 0 && c < BOARD_SIZE as i32
+                && board.get(r as usize, c as usize) == player
+            {
+                count += 1;
+                r -= dr;
+                c -= dc;
+            }
+            let left_open = r >= 0 && r < BOARD_SIZE as i32
+                && c >= 0 && c < BOARD_SIZE as i32
+                && board.get(r as usize, c as usize) == Color::Empty;
+
+            let open_ends = (left_open as i32) + (right_open as i32);
+            if count >= 2 {
+                if open_ends == 2 {
+                    bonus += count * count * 180;
+                    if count >= 3 {
+                        open_three_dirs += 1;
+                    } else {
+                        open_two_dirs += 1;
+                    }
+                } else if open_ends == 1 {
+                    bonus += count * count * 60;
+                    if count >= 4 {
+                        isolated_forcing_dirs += 1;
+                    }
+                }
+            }
+        }
+
+        bonus += open_two_dirs * 220;
+        if open_three_dirs >= 2 {
+            bonus += 5_000;
+        } else if open_three_dirs == 1 && open_two_dirs >= 1 {
+            bonus += 1_800;
+        }
+
+        if board.move_count <= 14 && isolated_forcing_dirs >= 1 && open_two_dirs == 0 && open_three_dirs == 0 {
+            bonus -= 1_400 * isolated_forcing_dirs;
+        }
+
+        bonus
     }
 
     // =========================================================================
@@ -744,8 +847,9 @@ impl GomokuAi {
             .iter()
             .filter_map(|&(r, c)| {
                 let s = evaluate_position(board, r, c, opp);
-                // DOUBLE_THREAT_THRESHOLD 覆盖双活三（≈7000）和更高的组合威胁
-                if s >= DOUBLE_THREAT_THRESHOLD { Some(((r, c), s)) } else { None }
+                // 冲四（SCORE_BLOCKED_FOUR）以上都属于关键威胁：
+                // 单冲四必须应手；双三/三四/活四则由更高评分自然排到前面。
+                if s >= SCORE_BLOCKED_FOUR { Some(((r, c), s)) } else { None }
             })
             .max_by_key(|&(_, s)| s)
             .map(|((r, c), _)| (r, c))
@@ -1782,13 +1886,20 @@ impl GomokuAi {
     }
 }
 
-fn when_threat_penalty(opp_best_threat: i32) -> i32 {
+fn when_threat_penalty(opp_best_threat: i32, move_count: usize) -> i32 {
     if opp_best_threat >= SCORE_FOUR {
-        opp_best_threat / 2
+        10_000 + opp_best_threat / 2
     } else if opp_best_threat >= DOUBLE_THREAT_THRESHOLD {
-        opp_best_threat / 3
+        let base = if move_count <= 24 { 6_000 } else { 4_000 };
+        base + opp_best_threat / 2
     } else if opp_best_threat >= SCORE_BLOCKED_FOUR {
-        opp_best_threat / 4
+        1_200 + opp_best_threat / 3
+    } else if opp_best_threat >= SCORE_THREE {
+        if move_count <= 14 {
+            opp_best_threat / 2
+        } else {
+            opp_best_threat / 3
+        }
     } else {
         0
     }
@@ -1943,6 +2054,45 @@ mod tests {
 
         let mv = ai.take_turn(&board).unwrap();
         assert!(mv == (7, 6) || mv == (7, 10), "unexpected move: {:?}", mv);
+    }
+
+    #[test]
+    fn hard_ai_blocks_single_blocked_four_threat() {
+        let board = board_with_moves(&[
+            (7, 5, Color::Black),
+            (7, 6, Color::White),
+            (7, 7, Color::White),
+            (7, 8, Color::White),
+            (6, 6, Color::Black),
+            (8, 8, Color::Black),
+        ]);
+        let mut ai = GomokuAi::new(AiConfig {
+            max_depth: 12,
+            time_limit_ms: 4_000,
+            player: Color::Black,
+        });
+
+        let mv = ai.take_turn(&board).unwrap();
+        assert_eq!(mv, (7, 9));
+    }
+
+    #[test]
+    fn opening_keeps_mild_defense_discount() {
+        let board = board_with_moves(&[
+            (7, 7, Color::White),
+            (7, 8, Color::White),
+            (6, 6, Color::Black),
+            (6, 7, Color::Black),
+        ]);
+        let ai = GomokuAi::new(AiConfig {
+            max_depth: 20,
+            time_limit_ms: 8_000,
+            player: Color::Black,
+        });
+
+        let attack_score = ai.move_tactical_score(&board, 6, 8, Color::Black);
+        let defend_score = ai.move_tactical_score(&board, 7, 9, Color::Black);
+        assert!(attack_score >= defend_score, "attack={attack_score}, defend={defend_score}");
     }
 
     #[test]
