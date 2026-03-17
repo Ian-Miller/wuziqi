@@ -77,23 +77,25 @@
 
   <!-- Zoomed content inside lens ─ clipped to lens circle -->
   <g clip-path="url(#lensClip)">
-    <!-- Board tint (semi-transparent warm overlay distinguishes lens area) -->
+    <!-- Board tint: warm semi-transparent overlay to distinguish lens from background -->
     <rect x="225" y="225" width="350" height="350" fill="#D4A96A" fill-opacity="0.58"/>
-    <!-- Grid lines: match actual background grid at x=320, x=448, y=320, y=448 -->
-    <line x1="225" y1="320" x2="565" y2="320" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <line x1="225" y1="448" x2="565" y2="448" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <line x1="320" y1="225" x2="320" y2="565" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <line x1="448" y1="225" x2="448" y2="565" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <!-- Hoshi dots at the two empty intersections -->
-    <circle cx="448" cy="320" r="8" fill="#5C3D1A" fill-opacity="0.55"/>
-    <circle cx="320" cy="448" r="8" fill="#5C3D1A" fill-opacity="0.55"/>
-    <!-- Black piece at top-left intersection (320, 320) -->
-    <circle cx="320" cy="320" r="40" fill="url(#blackPiece)"/>
-    <ellipse cx="307" cy="307" rx="13" ry="9" fill="white" fill-opacity="0.28"/>
-    <!-- White piece at bottom-right intersection (448, 448) — fully on canvas (448+40=488<512) -->
-    <circle cx="448" cy="448" r="40" fill="url(#whitePiece)"/>
-    <circle cx="448" cy="448" r="40" fill="none" stroke="#999898" stroke-width="2" stroke-opacity="0.5"/>
-    <ellipse cx="435" cy="435" rx="13" ry="9" fill="white" fill-opacity="0.75"/>
+    <!-- Zoomed grid: spacing=160px, lines at 340 and 500
+         piece_r/spacing = 57/160 = 0.356 ≈ background 46/128 = 0.359 ✓
+         Black at (340,340) fully inside lens; white at (500,500) canvas-clipped at x=y=512 -->
+    <line x1="225" y1="340" x2="565" y2="340" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <line x1="225" y1="500" x2="565" y2="500" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <line x1="340" y1="225" x2="340" y2="565" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <line x1="500" y1="225" x2="500" y2="565" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <!-- Hoshi dots at the two empty intersections (visible inside lens + canvas) -->
+    <circle cx="500" cy="340" r="9" fill="#5C3D1A" fill-opacity="0.55"/>
+    <circle cx="340" cy="500" r="9" fill="#5C3D1A" fill-opacity="0.55"/>
+    <!-- Black piece at top-left intersection (340,340), r=57 — visibly larger than background r=46 -->
+    <circle cx="340" cy="340" r="57" fill="url(#blackPiece)"/>
+    <ellipse cx="324" cy="324" rx="17" ry="12" fill="white" fill-opacity="0.28"/>
+    <!-- White piece at bottom-right intersection (500,500), r=57 — canvas clips at x=512,y=512 -->
+    <circle cx="500" cy="500" r="57" fill="url(#whitePiece)"/>
+    <circle cx="500" cy="500" r="57" fill="none" stroke="#999898" stroke-width="2" stroke-opacity="0.5"/>
+    <ellipse cx="484" cy="484" rx="17" ry="12" fill="white" fill-opacity="0.75"/>
   </g>
 
   <!-- Lens rim -->
