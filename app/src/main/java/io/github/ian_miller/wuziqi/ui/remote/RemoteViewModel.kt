@@ -740,9 +740,18 @@ class RemoteViewModel @Inject constructor(
         _gameState.update { it?.copy(rematchOfferedColor = null, mySeq = gs.mySeq + 1) }
     }
 
-    /** 清除对方发来的再开局请求（超时自动调用） */
+    /** 清除对方发来的再开局请求（超时自动调用）。
+     *  若请求仍在活跃（未被显式拒绝），同时向发起方发送 REMATCH_REJECT，
+     *  避免对方一直处于"等待对方接受"的状态直到其自身 20s 超时。
+     *  若已被 rejectRematch() 显式拒绝（rematchOfferedColor 已为 null），幂等退出。
+     */
     fun clearRematchOffer() {
-        _gameState.update { it?.copy(rematchOfferedColor = null) }
+        val gs = _gameState.value ?: return
+        if (gs.rematchOfferedColor == null) return  // 已被显式拒绝，无需重复发送
+        val msg = GameMsg(MsgType.REMATCH_REJECT, gameId = gs.gameId, seq = gs.mySeq)
+        lanBridge?.send(msg)
+        sendNostrGameMsg(msg)
+        _gameState.update { it?.copy(rematchOfferedColor = null, mySeq = gs.mySeq + 1) }
     }
 
     /** 重置棋盘开始新一局，保持连接不断 */
@@ -864,6 +873,12 @@ class RemoteViewModel @Inject constructor(
                     val opponentColor = runCatching { PieceColor.valueOf(msg.payload) }.getOrNull()
                     val myColor = opponentColor?.opposite() ?: gs.myColor.opposite()
                     startRematch(myColor = myColor)
+                } else if (gs.isGameOver) {
+                    // 超时后延迟到达的 REMATCH_ACCEPT（我方已取消等待）：
+                    // 发回 REMATCH_REJECT 维持双端状态一致，避免对方进入已开局但我方未开局的状态
+                    val reject = GameMsg(MsgType.REMATCH_REJECT, gameId = gs.gameId, seq = gs.mySeq)
+                    lanBridge?.send(reject)
+                    sendNostrGameMsg(reject)
                 }
             }
             MsgType.REMATCH_REJECT -> {
