@@ -221,11 +221,11 @@ class RemoteViewModel @Inject constructor(
     private fun startAutoReconnect() {
         reconnectJob?.cancel()
         reconnectJob = viewModelScope.launch {
-            var backoff = 3_000L
+            var backoff = RemoteTiming.RECONNECT_INITIAL_BACKOFF_MS
             while (isActive && !_lanPeerConnected.value) {
                 delay(backoff)
                 lanBridge?.reconnect(lanStoredIp, lanStoredPort)
-                backoff = minOf(backoff * 2, 30_000L)
+                backoff = minOf(backoff * 2, RemoteTiming.RECONNECT_MAX_BACKOFF_MS)
             }
         }
     }
@@ -496,10 +496,10 @@ class RemoteViewModel @Inject constructor(
         ).also { it.connectToHost(ip, port) }
         _state.update { it.copy(phase = RemotePhase.WaitingForOpponent) }
 
-        // 连接超时：若 15 秒内未收到 JOIN_ACK，视为连接失败
+        // 连接超时：若固定时间内未收到 JOIN_ACK，视为连接失败
         joinTimeoutJob?.cancel()
         joinTimeoutJob = viewModelScope.launch {
-            delay(15_000L)
+            delay(RemoteTiming.JOIN_TIMEOUT_MS)
             if (_state.value.phase is RemotePhase.WaitingForOpponent) {
                 reconnectJob?.cancel()
                 lanBridge?.close()
@@ -670,7 +670,7 @@ class RemoteViewModel @Inject constructor(
         // 发起方超时 t_2 = 5s：超时后自动取消等待状态，任何延迟到达的 DRAW_ACCEPT 将被拒绝
         drawTimeoutJob?.cancel()
         drawTimeoutJob = viewModelScope.launch {
-            delay(5_000L)
+            delay(RemoteTiming.REQUEST_AUTO_DISMISS_MS)
             _gameState.update { it?.copy(drawSentByMe = false) }
             drawTimeoutJob = null
         }
@@ -713,7 +713,7 @@ class RemoteViewModel @Inject constructor(
         // 发起方超时 t_2 = 8s：接收方 t_1 = 5s，额外保留 3s 处理传输与调度延迟
         rematchTimeoutJob?.cancel()
         rematchTimeoutJob = viewModelScope.launch {
-            delay(8_000L)
+            delay(RemoteTiming.REQUEST_SENDER_GRACE_MS)
             _gameState.update { it?.copy(rematchSentByMe = false) }
         }
     }
@@ -742,7 +742,7 @@ class RemoteViewModel @Inject constructor(
 
     /** 清除对方发来的再开局请求（超时自动调用）。
      *  若请求仍在活跃（未被显式拒绝），同时向发起方发送 REMATCH_REJECT，
-     *  避免对方一直处于"等待对方接受"的状态直到其自身 8s 超时。
+        *  避免对方一直处于"等待对方接受"的状态直到其自身发起方等待超时。
      *  若已被 rejectRematch() 显式拒绝（rematchOfferedColor 已为 null），幂等退出。
      */
     fun clearRematchOffer() {

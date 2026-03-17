@@ -558,10 +558,8 @@ impl GomokuAi {
                     .unwrap_or(10) as i64
             };
 
-            // 攻守兼顾（与 heuristic_score 一致：进攻全值 + 防守 9/10）
-            let attack  = evaluate_position(board, r, c, player) as i64;
-            let defense = evaluate_position(board, r, c, opponent) as i64;
-            let eval = attack + defense * 9 / 10;
+            // 攻守兼顾：高危防守点不降权，避免开局启发把强制防点排到后面。
+            let eval = self.move_tactical_score(board, r, c, player) as i64;
 
             // 综合评分：eval 优先，其次紧靠己方，再次靠近中心
             let score = eval * 1_000
@@ -595,11 +593,7 @@ impl GomokuAi {
     }
 
     fn heuristic_score(&self, board: &Board, row: usize, col: usize) -> i32 {
-        // evaluate_position 现在内置了复合威胁（双三/双四/三四）奖励
-        let my = evaluate_position(board, row, col, self.config.player);
-        let opp = evaluate_position(board, row, col, self.config.player.opponent());
-        // 进攻分全值 + 防御分 9/10（轻微偏向进攻）
-        let mut score = my + opp * 9 / 10;
+        let mut score = self.move_tactical_score(board, row, col, self.config.player);
 
         // HARD / MASTER：轻量两步计划加权（不做完整前瞻，仅用于走法排序）
         if self.config.max_depth >= 12 {
@@ -635,12 +629,9 @@ impl GomokuAi {
         let mut high_threat_count = 0i32;
         let mut mid_threat_count = 0i32;
         let mut best_follow = 0i32;
+        let mut opp_best_threat = 0i32;
 
-        for (idx, (r, c)) in next.iter().copied().enumerate() {
-            // 控制计算量：只看前 24 个候选
-            if idx >= 24 {
-                break;
-            }
+        for (r, c) in next.iter().copied() {
             let s = evaluate_position(&b, r, c, self.config.player);
             if s >= SCORE_BLOCKED_FOUR {
                 high_threat_count += 1;
@@ -650,29 +641,27 @@ impl GomokuAi {
             if s > best_follow {
                 best_follow = s;
             }
-        }
 
-        // 3) 对方后手威胁评估：若落子后对方能形成双三（≥5000）以上的复合威胁，
-        //    说明当前走法让对方获得了战略主动，适度降权。
-        //    这是捕获"进攻但忽视对方活三"的关键修正。
-        let mut opp_best_threat = 0i32;
-        for (idx, &(r, c)) in next.iter().enumerate() {
-            if idx >= 16 {
-                break;
-            }
             let s = evaluate_position(&b, r, c, opp);
             if s > opp_best_threat {
                 opp_best_threat = s;
             }
         }
-        // 双三（≈5000）以上才惩罚；单活三（≈1000）属正常局面，交给深搜处理
-        let threat_penalty = if opp_best_threat >= DOUBLE_THREAT_THRESHOLD {
-            opp_best_threat / 4
-        } else {
-            0
-        };
+
+        let threat_penalty = when_threat_penalty(opp_best_threat);
 
         high_threat_count * 4_000 + mid_threat_count * 900 + best_follow / 10 - threat_penalty
+    }
+
+    fn move_tactical_score(&self, board: &Board, row: usize, col: usize, player: Color) -> i32 {
+        let attack = evaluate_position(board, row, col, player);
+        let defense = evaluate_position(board, row, col, player.opponent());
+        let defense_weighted = if defense >= SCORE_BLOCKED_FOUR {
+            defense
+        } else {
+            defense * 9 / 10
+        };
+        attack + defense_weighted
     }
 
     // =========================================================================
@@ -1316,8 +1305,7 @@ impl GomokuAi {
         let mut moves: Vec<((usize, usize), i32)> = raw
             .into_iter()
             .map(|(r, c)| {
-                let mut score = evaluate_position(board, r, c, player)
-                    + evaluate_position(board, r, c, player.opponent()) * 9 / 10;
+                let mut score = self.move_tactical_score(board, r, c, player);
                 // 置换表最佳走法额外奖励，确保排在首位
                 if Some((r, c)) == tt_best_move {
                     score += 1_000_000;
@@ -1470,8 +1458,8 @@ impl GomokuAi {
             return 0;
         }
         for (r, c) in candidates {
-            score += evaluate_position(board, r, c, player);
-            score -= evaluate_position(board, r, c, player.opponent()) * 9 / 10;
+            score += self.move_tactical_score(board, r, c, player);
+            score -= self.move_tactical_score(board, r, c, player.opponent());
         }
 
         // HARD / MASTER 增加全局战略评估（分阶段权重）：
@@ -1510,8 +1498,8 @@ impl GomokuAi {
                 let c = cc as usize;
                 if board.get(r, c) == Color::Empty && !marked[r][c] {
                     marked[r][c] = true;
-                    score += evaluate_position(board, r, c, player);
-                    score -= evaluate_position(board, r, c, opp) * 9 / 10;
+                    score += self.move_tactical_score(board, r, c, player);
+                    score -= self.move_tactical_score(board, r, c, opp);
                 }
             }
         }
@@ -1794,6 +1782,18 @@ impl GomokuAi {
     }
 }
 
+fn when_threat_penalty(opp_best_threat: i32) -> i32 {
+    if opp_best_threat >= SCORE_FOUR {
+        opp_best_threat / 2
+    } else if opp_best_threat >= DOUBLE_THREAT_THRESHOLD {
+        opp_best_threat / 3
+    } else if opp_best_threat >= SCORE_BLOCKED_FOUR {
+        opp_best_threat / 4
+    } else {
+        0
+    }
+}
+
 /// 严格四连威胁检测：在 (row, col) 落子（颜色 color）后，
 /// 检查是否形成「真实四连」—— 不允许跳格，且至少一端开放。
 ///
@@ -1869,4 +1869,102 @@ fn is_real_four_threat_if_placed(
         return false; // 直接五连不算"冲四"，由上层单独处理
     }
     is_real_four_threat(&b, row, col, color)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn board_with_moves(moves: &[(usize, usize, Color)]) -> Board {
+        let mut board = Board::new();
+        for &(row, col, color) in moves {
+            assert!(board.place(row, col, color));
+        }
+        board
+    }
+
+    #[test]
+    fn evaluate_position_keeps_four_combo_bonus() {
+        let pure_open_four = board_with_moves(&[
+            (7, 5, Color::Black),
+            (7, 6, Color::Black),
+            (7, 8, Color::Black),
+        ]);
+        let combo_board = board_with_moves(&[
+            (7, 5, Color::Black),
+            (7, 6, Color::Black),
+            (7, 8, Color::Black),
+            (5, 7, Color::Black),
+            (6, 7, Color::Black),
+            (8, 7, Color::Black),
+            (4, 7, Color::White),
+        ]);
+
+        let pure_score = evaluate_position(&pure_open_four, 7, 7, Color::Black);
+        let combo_score = evaluate_position(&combo_board, 7, 7, Color::Black);
+        assert!(combo_score > pure_score, "pure={pure_score}, combo={combo_score}");
+    }
+
+    #[test]
+    fn heuristic_score_prioritizes_strong_defense() {
+        let board = board_with_moves(&[
+            (7, 7, Color::White),
+            (7, 8, Color::White),
+            (7, 9, Color::White),
+            (6, 6, Color::Black),
+            (8, 8, Color::Black),
+        ]);
+        let ai = GomokuAi::new(AiConfig {
+            max_depth: 12,
+            time_limit_ms: 4_000,
+            player: Color::Black,
+        });
+
+        let defend = ai.heuristic_score(&board, 7, 10);
+        let attack = ai.heuristic_score(&board, 6, 8);
+        assert!(defend > attack, "defend={defend}, attack={attack}");
+    }
+
+    #[test]
+    fn hard_ai_blocks_open_three_extension() {
+        let board = board_with_moves(&[
+            (7, 7, Color::White),
+            (7, 8, Color::White),
+            (7, 9, Color::White),
+            (6, 6, Color::Black),
+            (8, 8, Color::Black),
+            (9, 9, Color::Black),
+        ]);
+        let mut ai = GomokuAi::new(AiConfig {
+            max_depth: 12,
+            time_limit_ms: 4_000,
+            player: Color::Black,
+        });
+
+        let mv = ai.take_turn(&board).unwrap();
+        assert!(mv == (7, 6) || mv == (7, 10), "unexpected move: {:?}", mv);
+    }
+
+    #[test]
+    fn master_ai_prefers_compound_forcing_attack() {
+        let board = board_with_moves(&[
+            (7, 5, Color::Black),
+            (7, 6, Color::Black),
+            (7, 8, Color::Black),
+            (5, 7, Color::Black),
+            (6, 7, Color::Black),
+            (8, 7, Color::Black),
+            (4, 7, Color::White),
+            (10, 10, Color::White),
+            (10, 11, Color::White),
+        ]);
+        let mut ai = GomokuAi::new(AiConfig {
+            max_depth: 20,
+            time_limit_ms: 8_000,
+            player: Color::Black,
+        });
+
+        let mv = ai.take_turn(&board).unwrap();
+        assert_eq!(mv, (7, 7));
+    }
 }

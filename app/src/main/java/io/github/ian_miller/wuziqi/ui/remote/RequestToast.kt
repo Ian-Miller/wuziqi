@@ -38,7 +38,7 @@ fun RequestToast(
     onAccept: () -> Unit,
     onReject: () -> Unit,
     modifier: Modifier = Modifier,
-    autoDismissMs: Long = 15_000L,
+    autoDismissMs: Long = RemoteTiming.TOAST_AUTO_DISMISS_MS,
     onTimeout: () -> Unit = onReject,
 ) {
     // 自动消失计时（key = message 确保内容变化时重置计时）

@@ -165,13 +165,13 @@ fun RemoteGameScreen(
                     // 对方请求超时在 LaunchedEffect 中倒计时；认输确认在其自身 content block 中倒计时
                     if (gameState.drawOfferedByOpponent) {
                         LaunchedEffect(Unit) {
-                            delay(5_000L)
+                            delay(RemoteTiming.REQUEST_AUTO_DISMISS_MS)
                             viewModel.rejectDraw()
                         }
                     }
                     if (gameState.rematchOfferedColor != null) {
                         LaunchedEffect(gameState.rematchOfferedColor) {
-                            delay(5_000L)
+                            delay(RemoteTiming.REQUEST_AUTO_DISMISS_MS)
                             viewModel.clearRematchOffer()
                         }
                     }
@@ -255,7 +255,7 @@ fun RemoteGameScreen(
                             InlineAction.ResignConfirm -> {
                                 // 认输确认 toast：5s 自动取消；✓=红色（危险操作），✗=中性（取消）
                                 LaunchedEffect(Unit) {
-                                    delay(5_000L)
+                                    delay(RemoteTiming.RESIGN_CONFIRM_MS)
                                     confirmResign = false
                                 }
                                 InlineRequestRow(

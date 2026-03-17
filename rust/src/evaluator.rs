@@ -55,14 +55,14 @@ pub fn evaluate_position(board: &Board, row: usize, col: usize, color: Color) ->
     }
 
     // 复合威胁加成
-    if fours == 0 {
-        if bfours >= 2 {
-            score += BONUS_DOUBLE_FOUR;
-        } else if bfours >= 1 && threes >= 1 {
-            score += BONUS_THREE_FOUR;
-        } else if threes >= 2 {
-            score += BONUS_DOUBLE_THREE;
-        }
+    // 允许“活四 + 其他方向威胁”继续叠加，避免把更强的复合杀点压平成普通活四。
+    if bfours >= 2 {
+        score += BONUS_DOUBLE_FOUR;
+    } else if bfours >= 1 && threes >= 1 {
+        score += BONUS_THREE_FOUR;
+    } else if threes >= 2 && fours == 0 {
+        // 双三本身仍要求当前点不是活四，否则其价值已被更高层威胁覆盖。
+        score += BONUS_DOUBLE_THREE;
     }
 
     score

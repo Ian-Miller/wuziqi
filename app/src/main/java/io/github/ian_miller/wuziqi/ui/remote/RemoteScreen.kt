@@ -102,7 +102,7 @@ fun RemoteLobbyScreen(
                     if (p.isLan) {
                         LaunchedEffect(Unit) {
                             while (true) {
-                                delay(5_000L)
+                                delay(RemoteTiming.LAN_SERVER_KEEPALIVE_MS)
                                 viewModel.ensureLanServerAlive()
                             }
                         }
