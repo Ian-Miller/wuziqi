@@ -667,7 +667,7 @@ class RemoteViewModel @Inject constructor(
         lanBridge?.send(msg)
         sendNostrGameMsg(msg)
         _gameState.update { it?.copy(drawSentByMe = true, mySeq = gs.mySeq + 1) }
-        // 发起方超时 t_2 = 30s：超时后自动取消等待状态，任何延迟到达的 DRAW_ACCEPT 将被拒绝
+        // 发起方超时 t_2 = 5s：超时后自动取消等待状态，任何延迟到达的 DRAW_ACCEPT 将被拒绝
         drawTimeoutJob?.cancel()
         drawTimeoutJob = viewModelScope.launch {
             delay(5_000L)
@@ -710,10 +710,10 @@ class RemoteViewModel @Inject constructor(
         lanBridge?.send(msg)
         sendNostrGameMsg(msg)
         _gameState.update { it?.copy(rematchSentByMe = true, mySeq = gs.mySeq + 1) }
-        // 发起方超时 t_2 = 20s
+        // 发起方超时 t_2 = 8s：接收方 t_1 = 5s，额外保留 3s 处理传输与调度延迟
         rematchTimeoutJob?.cancel()
         rematchTimeoutJob = viewModelScope.launch {
-            delay(20_000L)
+            delay(8_000L)
             _gameState.update { it?.copy(rematchSentByMe = false) }
         }
     }
@@ -742,7 +742,7 @@ class RemoteViewModel @Inject constructor(
 
     /** 清除对方发来的再开局请求（超时自动调用）。
      *  若请求仍在活跃（未被显式拒绝），同时向发起方发送 REMATCH_REJECT，
-     *  避免对方一直处于"等待对方接受"的状态直到其自身 20s 超时。
+     *  避免对方一直处于"等待对方接受"的状态直到其自身 8s 超时。
      *  若已被 rejectRematch() 显式拒绝（rematchOfferedColor 已为 null），幂等退出。
      */
     fun clearRematchOffer() {
