@@ -3,11 +3,16 @@ package io.github.ian_miller.wuziqi.ui.remote
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -30,6 +35,7 @@ import io.github.ian_miller.wuziqi.ui.game.GameStatus
 import io.github.ian_miller.wuziqi.ui.game.GlassyButton
 import io.github.ian_miller.wuziqi.ui.game.MagnifierState
 import io.github.ian_miller.wuziqi.ui.game.MagnifierView
+import io.github.ian_miller.wuziqi.ui.game.SettingsSwitchRow
 import io.github.ian_miller.wuziqi.ui.game.SinglePlayerGameHud
 import io.github.ian_miller.wuziqi.ui.menu.MenuViewModel
 import io.github.ian_miller.wuziqi.ui.theme.LocalStrings
@@ -79,57 +85,92 @@ fun RemoteGameScreen(
     val soundEnabled by viewModel.soundEnabled.collectAsState()
     val vibrationEnabled by viewModel.vibrationEnabled.collectAsState()
 
+    BackHandler(enabled = showSettings) { showSettings = false }
+
     // 和棋/再来一局/认输确认 均在操作行内以 AnimatedContent 滑动切换（InlineAction）
 
     // ── 设置面板 ─────────────────────────────────────────────────────────────────────────
     if (showSettings) {
-        AlertDialog(
-            onDismissRequest = { showSettings = false },
-            title = { Text(s.gameSettings, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+                .zIndex(20f)
+                .clickable { showSettings = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
+                    .padding(horizontal = 16.dp),
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                    border = BorderStroke(4.dp, Color(0xFF5D4037)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(24.dp)
+                            .verticalScroll(rememberScrollState()),
                     ) {
-                        Icon(Icons.Default.VolumeUp, null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Text(s.sound, modifier = Modifier.weight(1f))
-                        Switch(
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = s.gameSettings,
+                                style = MaterialTheme.typography.headlineMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF3E2723),
+                                ),
+                                modifier = Modifier.padding(bottom = 16.dp),
+                            )
+                        }
+
+                        HorizontalDivider(color = Color(0xFF8D6E63), thickness = 2.dp)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        SettingsSwitchRow(
+                            text = s.sound,
+                            icon = Icons.Filled.VolumeUp,
                             checked = soundEnabled,
                             onCheckedChange = { viewModel.setSoundEnabled(it) },
                         )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.Vibration, null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Text(s.vibration, modifier = Modifier.weight(1f))
-                        Switch(
+                        SettingsSwitchRow(
+                            text = s.vibration,
+                            icon = Icons.Filled.Vibration,
                             checked = vibrationEnabled,
                             onCheckedChange = { viewModel.setVibrationEnabled(it) },
                         )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.ZoomIn, null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(12.dp))
-                        Text(s.magnifier, modifier = Modifier.weight(1f))
-                        Switch(
+                        SettingsSwitchRow(
+                            text = s.magnifier,
+                            icon = Icons.Filled.ZoomIn,
                             checked = magnifierEnabled,
                             onCheckedChange = { menuViewModel.setMagnifierEnabled(it) },
                         )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Button(
+                            onClick = { showSettings = false },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF5D4037),
+                                contentColor = Color(0xFFFFE082),
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(s.done, style = MaterialTheme.typography.titleMedium)
+                        }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSettings = false }) { Text(s.close) }
-            },
-        )
+            }
+        }
     }
 
     // ── 主布局：覆盖层模式（无 Scaffold） ────────────────────────────────────
@@ -469,6 +510,16 @@ fun RemoteGameScreen(
                 .zIndex(7f),
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 设置按钮（始终可用）
+                IconButton(
+                    onClick = { showSettings = true },
+                    modifier = Modifier.background(
+                        Color(0xFF5D4037).copy(alpha = 0.75f),
+                        RoundedCornerShape(50),
+                    ),
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = s.gameSettings, tint = Color(0xFFFFE082))
+                }
                 // 游戏结束后显示明确的“退出对局”按钮
                 if (gameState.isGameOver) {
                     IconButton(
@@ -480,16 +531,6 @@ fun RemoteGameScreen(
                     ) {
                         Icon(Icons.Default.ExitToApp, contentDescription = s.exitMatch, tint = Color(0xFFFFE082))
                     }
-                }
-                // 设置按钮（始终可用）
-                IconButton(
-                    onClick = { showSettings = true },
-                    modifier = Modifier.background(
-                        Color(0xFF5D4037).copy(alpha = 0.75f),
-                        RoundedCornerShape(50),
-                    ),
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = "设置", tint = Color(0xFFFFE082))
                 }
             }
         }

@@ -255,6 +255,7 @@ class GameViewModelV2 @Inject constructor(
         // AI
         val isAiThinking: Boolean,
         val aiProgress: Float,
+        val aiThinkingSeconds: Int,
         val aiHint: Pair<Int, Int>?,
         val isCalculatingHint: Boolean,
         val canUndo: Boolean,
@@ -282,6 +283,7 @@ class GameViewModelV2 @Inject constructor(
                 pvpBottomIsBlack = true,
                 isAiThinking = false,
                 aiProgress = 0f,
+                aiThinkingSeconds = 0,
                 aiHint = null,
                 isCalculatingHint = false,
                 canUndo = false,
@@ -294,9 +296,9 @@ class GameViewModelV2 @Inject constructor(
     }
 
     val uiModel: StateFlow<UiModel> = combine(
-        _gameState, _uiState, progressTracker.progress, _aiBestMoveHint
-    ) { state, ui, progress, bestMove ->
-        buildUiModel(state, ui, progress, bestMove)
+        _gameState, _uiState, progressTracker.progress, progressTracker.elapsedSeconds, _aiBestMoveHint
+    ) { state, ui, progress, elapsedSeconds, bestMove ->
+        buildUiModel(state, ui, progress, elapsedSeconds, bestMove)
     }
         .stateIn(viewModelScope, SharingStarted.Eagerly, UiModel.loading())
     
@@ -1053,7 +1055,13 @@ class GameViewModelV2 @Inject constructor(
     // UiModel 构建（私有）
     // ========================================================================
 
-    private fun buildUiModel(state: State, ui: UiState, aiProgressRaw: Float, bestMoveHint: Pair<Int, Int>?): UiModel {
+    private fun buildUiModel(
+        state: State,
+        ui: UiState,
+        aiProgressRaw: Float,
+        aiThinkingSecondsRaw: Int,
+        bestMoveHint: Pair<Int, Int>?
+    ): UiModel {
         val gameStatus = when (state) {
             is State.Initializing -> GameStatus.NOT_STARTED
             is State.Idle -> GameStatus.NOT_STARTED
@@ -1165,6 +1173,10 @@ class GameViewModelV2 @Inject constructor(
             aiProgress = when (state) {
                 is State.WaitingForAi, is State.Pausing, is State.Paused -> aiProgressRaw.coerceIn(0f, 1f)
                 else -> 0f
+            },
+            aiThinkingSeconds = when (state) {
+                is State.WaitingForAi, is State.Pausing, is State.Paused -> aiThinkingSecondsRaw.coerceAtLeast(0)
+                else -> 0
             },
             aiHint = aiHint,
             isCalculatingHint = isCalculatingHint,
@@ -1440,6 +1452,7 @@ class GameViewModelV2 @Inject constructor(
         progressTracker.start(aiTimeLimitMs(state.difficulty))   // 重置并传入 AI 时间预算
         val aiColorInt = if (state.aiPlayerColor == PieceColor.BLACK) 1 else 2
         val minAnimMs = minProgressAnimMs(state.difficulty)
+        val shouldSkipOpeningDelay = state.moveHistory.size <= 1
         // 仅在进度明显未到位时才保留少量收尾动画预算
         val finishBudgetMs = 282L
         aiJob = viewModelScope.launch(Dispatchers.Default) {
@@ -1468,21 +1481,23 @@ class GameViewModelV2 @Inject constructor(
                 pollJob.cancel()
                 _aiBestMoveHint.value = null   // 落子前清除预览
                 if (move != null) {
-                    val currentProgress = progressTracker.progress.value
-                    // 仅在进度明显未到位时才补足最小动画时长；若视觉上已接近满环则立即落子
-                    val elapsed = System.currentTimeMillis() - thinkStart
-                    val fillRemaining = if (currentProgress < 0.92f) {
-                        (minAnimMs - elapsed - finishBudgetMs).coerceAtLeast(0L)
-                    } else {
-                        0L
-                    }
-                    if (fillRemaining > 0L) {
-                        delay(fillRemaining)
-                    }
-                    // 仅在尚未接近满环时做短暂补满，避免已经满环后还明显等待
-                    if (progressTracker.progress.value < 0.985f) {
-                        progressTracker.setManualTarget(1.0f)
-                        delay(120L)
+                    if (!shouldSkipOpeningDelay) {
+                        val currentProgress = progressTracker.progress.value
+                        // 仅在进度明显未到位时才补足最小动画时长；若视觉上已接近满环则立即落子
+                        val elapsed = System.currentTimeMillis() - thinkStart
+                        val fillRemaining = if (currentProgress < 0.92f) {
+                            (minAnimMs - elapsed - finishBudgetMs).coerceAtLeast(0L)
+                        } else {
+                            0L
+                        }
+                        if (fillRemaining > 0L) {
+                            delay(fillRemaining)
+                        }
+                        // 仅在尚未接近满环时做短暂补满，避免已经满环后还明显等待
+                        if (progressTracker.progress.value < 0.985f) {
+                            progressTracker.setManualTarget(1.0f)
+                            delay(120L)
+                        }
                     }
                     progressTracker.complete()
                     sendCommand(Cmd.AiDone(Piece(move.first, move.second, state.aiPlayerColor)))
@@ -1515,6 +1530,8 @@ class GameViewModelV2 @Inject constructor(
     private inner class SoftProgressTracker {
         private val _progress = MutableStateFlow(0f)
         val progress: StateFlow<Float> = _progress
+        private val _elapsedSeconds = MutableStateFlow(0)
+        val elapsedSeconds: StateFlow<Int> = _elapsedSeconds
 
         @Volatile private var rustProgress: Float = 0f
         @Volatile private var manualTarget: Float = 0f
@@ -1537,6 +1554,7 @@ class GameViewModelV2 @Inject constructor(
             rustProgress = 0f; manualTarget = 0f
             displayed = 0f; prevRust = 0f; pendingBoost = 0f
             _progress.value = 0f
+            _elapsedSeconds.value = 0
             timeLimitMs = aiTimeLimitMs.coerceAtLeast(1L)
             startTimeMs = System.currentTimeMillis()
             loopJob = viewModelScope.launch {
@@ -1554,6 +1572,7 @@ class GameViewModelV2 @Inject constructor(
         private fun tick(now: Long, dt: Float) {
             val elapsed = (now - startTimeMs).toFloat()
             val T = timeLimitMs.toFloat()
+            _elapsedSeconds.value = (elapsed / 1000f).toInt().coerceAtLeast(0)
 
             /* ① 收集 Rust 增量 */
             val rp = rustProgress
@@ -1605,13 +1624,15 @@ class GameViewModelV2 @Inject constructor(
         /** AI 落子前：立即居满并停止循环 */
         fun complete() {
             rustProgress = 1f; manualTarget = 1f; displayed = 1f
-            _progress.value = 1f; loopJob?.cancel(); loopJob = null
+            _progress.value = 1f
+            _elapsedSeconds.value = (((System.currentTimeMillis() - startTimeMs).coerceAtLeast(0L)) / 1000L).toInt()
+            loopJob?.cancel(); loopJob = null
         }
 
         /** AI 取消 / 出错：立即清零 */
         fun cancel() {
             loopJob?.cancel(); loopJob = null; rustProgress = 0f
-            manualTarget = 0f; displayed = 0f; _progress.value = 0f
+            manualTarget = 0f; displayed = 0f; _progress.value = 0f; _elapsedSeconds.value = 0
         }
     }
     /**

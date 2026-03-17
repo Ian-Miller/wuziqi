@@ -94,6 +94,7 @@ fun SinglePlayerGameHud(
     playerName: String? = null,
     onSelect: (() -> Unit)? = null, // Select action
     aiProgress: Float = 0f,
+    aiThinkingSeconds: Int = 0,
     onPlayVictorySound: (() -> Unit)? = null, // New callback
     selectionHint: String? = null, // 自定义选择提示文字（null 则使用 s.clickToStart）
     /** 待回应请求的光圈颜色（null=无特殊光圈，非null优先于回合光圈）
@@ -226,9 +227,8 @@ fun SinglePlayerGameHud(
                         )
                         
                         if (gameStatus == GameStatus.PLAYING) {
-                            // 状态文字: AI 思考中显示百分比进度（恢复之前去掉的调试可视化）
-                            val percentText = if (!isPlayer && isActive && aiProgress > 0.01f) {
-                                "${(aiProgress * 100).toInt()}%"
+                            val elapsedText = if (!isPlayer && isActive) {
+                                s.aiThinkingElapsedFmt(aiThinkingSeconds.coerceAtLeast(0))
                             } else null
                             val statusText = if (isActive) {
                                 if (isPlayer) {
@@ -244,10 +244,9 @@ fun SinglePlayerGameHud(
                                 MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             }
 
-                            if (percentText != null) {
-                                // 进度数字直接更新，不走动画，防止每帧触发 fade 闪动
+                            if (elapsedText != null) {
                                 Text(
-                                    text = percentText,
+                                    text = elapsedText,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = statusColor,
                                 )
