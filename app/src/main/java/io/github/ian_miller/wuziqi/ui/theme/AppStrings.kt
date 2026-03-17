@@ -59,6 +59,8 @@ data class AppStrings(
     val hint: String,
     val aiGoFirst: String,
     val iGoFirst: String,
+    val copyBoard: String,
+    val copied: String,
 
     // ── 状态 Chip ─────────────────────────────────────────────────────────────
     val reconnecting: String,
@@ -311,6 +313,8 @@ val ZhStrings = AppStrings(
     hint = "提示",
     aiGoFirst = "AI先手",
     iGoFirst = "我先手",
+    copyBoard = "复制棋盘",
+    copied = "已复制",
 
     reconnecting = "⚠️ 重连中…",
     drawChip = "平局",
@@ -566,6 +570,8 @@ val EnStrings = AppStrings(
     hint = "Hint",
     aiGoFirst = "AI First",
     iGoFirst = "Me First",
+    copyBoard = "Copy Board",
+    copied = "Copied",
 
     reconnecting = "⚠️ Reconnecting…",
     drawChip = "Draw",

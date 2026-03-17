@@ -29,8 +29,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -58,10 +60,12 @@ import io.github.ian_miller.wuziqi.ui.remote.RemoteJoinScreen
 import io.github.ian_miller.wuziqi.ui.remote.RemoteGameScreen
 import io.github.ian_miller.wuziqi.ui.remote.RemoteViewModel
 import androidx.navigation.compose.navigation
+import io.github.ian_miller.wuziqi.BuildConfig
 import io.github.ian_miller.wuziqi.ui.theme.AppStrings
 import io.github.ian_miller.wuziqi.ui.theme.EnStrings
 import io.github.ian_miller.wuziqi.ui.theme.LocalStrings
 import io.github.ian_miller.wuziqi.ui.theme.ZhStrings
+import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -574,7 +578,16 @@ fun ActiveGameScreen(
     var magnifierState by remember { mutableStateOf<MagnifierState?>(null) } 
 
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val gameMode = model.mode
+    var boardCopied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(boardCopied) {
+        if (boardCopied) {
+            delay(1_200)
+            boardCopied = false
+        }
+    }
     
     // Manage fullscreen mode for VS_HUMAN
     DisposableEffect(gameMode) {
@@ -854,6 +867,13 @@ fun ActiveGameScreen(
                                 onUndo = { viewModel.undo() },
                                 onAssist = { viewModel.onShowAssistHint() },
                                 onMenu = { viewModel.showSettings() },
+                                debugBoardCopyVisible = BuildConfig.DEBUG && !isVsHuman && model.board.getAllPieces().isNotEmpty(),
+                                debugBoardCopied = boardCopied,
+                                onCopyBoard = {
+                                    val boardDump = viewModel.buildDebugBoardDump() ?: return@GameControlsRow
+                                    clipboardManager.setText(AnnotatedString(boardDump))
+                                    boardCopied = true
+                                },
                                 onStartAiFirst = null,
                                 onStartPlayerFirst = null
                             )

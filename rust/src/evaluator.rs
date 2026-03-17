@@ -16,8 +16,29 @@ const BONUS_DOUBLE_FOUR: i32 = 30_000;   // 双冲四 / 双四（几乎必胜）
 const BONUS_THREE_FOUR: i32 = 20_000;    // 活三 + 冲四
 const BONUS_OPP_DOUBLE_THREE: i32 = 2_000; // 堵对方双活三
 const BONUS_JUMP_THREE: i32 = 800;       // 隔活三（跳跃型活三，如 X_XX_ 或 XX_X_）
+const BONUS_JUMP_FOUR: i32 = 1_200;      // 真跳冲四（可两端推进的断四）
+const BONUS_DELAYED_DOUBLE: i32 = 2_400; // 延迟双威胁（下一拍可转双三/三四）
 
-/// 评估特定位置的价值（供 GomokuAi 调用）
+#[derive(Clone, Copy, Default)]
+struct SideInfo {
+    run: i32,
+    immediate_open: bool,
+    jump_run: i32,
+    jump_open: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct DirectionEval {
+    score: i32,
+    real_four: bool,
+    blocked_four: bool,
+    live_three: bool,
+    jump_three: bool,
+    jump_four: bool,
+    delayed_double: bool,
+}
+
+/// 评估特定位置的价值（供 MinimaxAi 调用）
 ///
 /// 综合四个方向的单向棋型分，再叠加跨方向复合威胁奖励。
 pub fn evaluate_position(board: &Board, row: usize, col: usize, color: Color) -> i32 {
@@ -27,30 +48,29 @@ pub fn evaluate_position(board: &Board, row: usize, col: usize, color: Color) ->
     let mut fours = 0i32;   // 活四方向数
     let mut bfours = 0i32;  // 冲四方向数
     let mut threes = 0i32;  // 活三方向数（含隔活三）
+    let mut jump_fours = 0i32;
+    let mut delayed_doubles = 0i32;
 
     for &(dr, dc) in &dirs {
-        let pattern = analyze_line(board, row, col, dr, dc, color);
-        let s = match_pattern_score(pattern);
-        score += s;
+        let eval = evaluate_direction(board, row, col, dr, dc, color);
+        score += eval.score;
+        if eval.jump_three {
+            score += BONUS_JUMP_THREE;
+        }
+        if eval.jump_four {
+            score += BONUS_JUMP_FOUR;
+            jump_fours += 1;
+        }
+        if eval.delayed_double {
+            delayed_doubles += 1;
+        }
 
-        // 统计各棋型方向数，用于复合威胁检测。
-        // SCORE_BLOCKED_FOUR (3000) > SCORE_THREE (1000)，两者现在可以直接按阈值区分，
-        // 不再需要对原始 pattern 做反向解析。
-        if s >= SCORE_FOUR {
+        if eval.real_four {
             fours += 1;
-        } else if s >= SCORE_BLOCKED_FOUR {
-            // 冲四（3000+）：强制对手响应
+        } else if eval.blocked_four {
             bfours += 1;
-        } else if s >= SCORE_THREE {
-            // 活三（1000~2999）：威胁但非强制
+        } else if eval.live_three {
             threes += 1;
-        } else {
-            // 检测隔活三（跳跃型活三），并加分
-            let jump = jump_three_score(board, row, col, dr, dc, color);
-            if jump > 0 {
-                score += jump;
-                threes += 1; // 隔活三也算活三，参与复合威胁检测
-            }
         }
     }
 
@@ -58,11 +78,17 @@ pub fn evaluate_position(board: &Board, row: usize, col: usize, color: Color) ->
     // 允许“活四 + 其他方向威胁”继续叠加，避免把更强的复合杀点压平成普通活四。
     if bfours >= 2 {
         score += BONUS_DOUBLE_FOUR;
+    } else if jump_fours >= 1 && threes >= 1 {
+        score += BONUS_THREE_FOUR;
     } else if bfours >= 1 && threes >= 1 {
         score += BONUS_THREE_FOUR;
     } else if threes >= 2 && fours == 0 {
         // 双三本身仍要求当前点不是活四，否则其价值已被更高层威胁覆盖。
         score += BONUS_DOUBLE_THREE;
+    }
+
+    if delayed_doubles > 0 && fours == 0 {
+        score += BONUS_DELAYED_DOUBLE * delayed_doubles;
     }
 
     score
@@ -80,14 +106,13 @@ pub fn evaluate_position_with_opp(board: &Board, row: usize, col: usize, color: 
     let mut opp_threes = 0i32;
     let mut opp_bfours = 0i32;
     for &(dr, dc) in &dirs {
-        let pattern = analyze_line(board, row, col, dr, dc, opp);
-        let s = match_pattern_score(pattern);
-        if s >= SCORE_FOUR {
+        let eval = evaluate_direction(board, row, col, dr, dc, opp);
+        if eval.real_four {
             // 对方有活四：即将五连，直接返回极高防御分
             return my_score + SCORE_FOUR * 2;
-        } else if s >= SCORE_BLOCKED_FOUR {
+        } else if eval.blocked_four {
             opp_bfours += 1;
-        } else if s >= SCORE_THREE {
+        } else if eval.live_three {
             opp_threes += 1;
         }
     }
@@ -101,7 +126,165 @@ pub fn evaluate_position_with_opp(board: &Board, row: usize, col: usize, color: 
     my_score + opp_bonus
 }
 
-/// 分析一条线上的棋型（供 GomokuAi 调用）
+fn scan_side(board: &Board, row: usize, col: usize, dr: i32, dc: i32, color: Color) -> SideInfo {
+    let mut r = row as i32 + dr;
+    let mut c = col as i32 + dc;
+    let mut info = SideInfo::default();
+
+    while in_bounds(r, c) && board.get(r as usize, c as usize) == color {
+        info.run += 1;
+        r += dr;
+        c += dc;
+    }
+
+    if in_bounds(r, c) && board.get(r as usize, c as usize) == Color::Empty {
+        info.immediate_open = true;
+        r += dr;
+        c += dc;
+
+        while in_bounds(r, c) && board.get(r as usize, c as usize) == color {
+            info.jump_run += 1;
+            r += dr;
+            c += dc;
+        }
+
+        info.jump_open = in_bounds(r, c) && board.get(r as usize, c as usize) == Color::Empty;
+    }
+
+    info
+}
+
+fn evaluate_direction(
+    board: &Board,
+    row: usize,
+    col: usize,
+    dr: i32,
+    dc: i32,
+    color: Color,
+) -> DirectionEval {
+    let left = scan_side(board, row, col, -dr, -dc, color);
+    let right = scan_side(board, row, col, dr, dc, color);
+
+    let mut eval = DirectionEval::default();
+    let straight = left.run + right.run + 1;
+    let open_ends = (left.immediate_open as i32) + (right.immediate_open as i32);
+
+    if straight >= 5 {
+        eval.score = SCORE_FIVE;
+        return eval;
+    }
+
+    if straight == 4 {
+        if open_ends == 2 {
+            eval.score = SCORE_FOUR;
+            eval.real_four = true;
+        } else {
+            eval.score = SCORE_BLOCKED_FOUR;
+            eval.blocked_four = true;
+        }
+        return eval;
+    }
+
+    let mut best_gap_score = 0i32;
+    let mut gap_is_four = false;
+    let mut gap_is_three = false;
+    let mut gap_is_jump_three = false;
+    let mut gap_is_jump_four = false;
+
+    for (jump_run, opposite_open, jump_open) in [
+        (left.jump_run, right.immediate_open, left.jump_open),
+        (right.jump_run, left.immediate_open, right.jump_open),
+    ] {
+        if jump_run <= 0 {
+            continue;
+        }
+
+        let total = straight + 1;
+        let gap_open_ends = (opposite_open as i32) + (jump_open as i32);
+
+        if total >= 4 {
+            if gap_open_ends >= 2 {
+                best_gap_score = best_gap_score.max(SCORE_BLOCKED_FOUR + 400);
+                gap_is_four = true;
+                gap_is_jump_four = true;
+            } else if gap_open_ends == 1 && jump_run >= 2 {
+                best_gap_score = best_gap_score.max(SCORE_BLOCKED_FOUR);
+                gap_is_four = true;
+            } else if gap_open_ends == 1 {
+                best_gap_score = best_gap_score.max(SCORE_BLOCKED_THREE);
+            }
+        } else if total == 3 {
+            if gap_open_ends == 2 {
+                best_gap_score = best_gap_score.max(SCORE_THREE);
+                gap_is_three = true;
+                gap_is_jump_three = true;
+            } else if gap_open_ends == 1 {
+                best_gap_score = best_gap_score.max(SCORE_BLOCKED_THREE);
+            }
+        } else if total == 2 {
+            if gap_open_ends == 2 {
+                best_gap_score = best_gap_score.max(SCORE_TWO);
+            } else if gap_open_ends == 1 {
+                best_gap_score = best_gap_score.max(SCORE_BLOCKED_TWO);
+            }
+        }
+    }
+
+    match straight {
+        3 => {
+            if open_ends == 2 {
+                eval.score = eval.score.max(SCORE_THREE);
+                eval.live_three = true;
+            } else if open_ends == 1 {
+                eval.score = eval.score.max(SCORE_BLOCKED_THREE);
+            }
+        }
+        2 => {
+            if open_ends == 2 {
+                eval.score = eval.score.max(SCORE_TWO);
+            } else if open_ends == 1 {
+                eval.score = eval.score.max(SCORE_BLOCKED_TWO);
+            }
+        }
+        1 => {
+            if open_ends == 2 && (left.jump_run > 0 || right.jump_run > 0) {
+                eval.score = eval.score.max(SCORE_TWO);
+            }
+        }
+        _ => {}
+    }
+
+    let delayed_double = open_ends == 2
+        && straight <= 2
+        && ((left.jump_run > 0 && right.jump_run > 0)
+            || (left.jump_run >= 2 && right.run >= 1)
+            || (right.jump_run >= 2 && left.run >= 1));
+    if delayed_double {
+        eval.score = eval.score.max(SCORE_THREE);
+        eval.delayed_double = true;
+    }
+
+    if best_gap_score > eval.score {
+        eval.score = best_gap_score;
+    }
+    if gap_is_four {
+        eval.blocked_four = true;
+        eval.live_three = false;
+    }
+    if gap_is_three {
+        eval.live_three = true;
+    }
+    if gap_is_jump_three {
+        eval.jump_three = true;
+    }
+    if gap_is_jump_four {
+        eval.jump_four = true;
+    }
+
+    eval
+}
+
+/// 分析一条线上的棋型（供 MinimaxAi 调用）
 /// 返回 (己方棋子数, 空格数, 是否被阻挡左, 是否被阻挡右)
 pub fn analyze_line(
     board: &Board,

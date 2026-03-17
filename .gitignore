@@ -73,3 +73,5 @@ nul
 
 # 内存转储文件
 *.hprof
+/feature_graphic_1024x500.png
+/feature_graphic.svg

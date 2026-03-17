@@ -951,6 +951,57 @@ class GameViewModelV2 @Inject constructor(
     fun undo() = sendCommand(Cmd.Undo)
     fun stopGame() = sendCommand(Cmd.Stop)
     fun restart() = sendCommand(Cmd.Restart)
+
+    fun buildDebugBoardDump(): String? {
+        val snapshot = currentDebugSnapshot() ?: return null
+        val moves = if (snapshot.moveHistory.isNotEmpty()) {
+            snapshot.moveHistory
+        } else {
+            snapshot.board.getAllPieces().sortedWith(compareBy<Piece>({ it.row }, { it.col }))
+        }
+
+        if (moves.isEmpty()) {
+            return null
+        }
+
+        return buildString {
+            appendLine("mode=${snapshot.mode.name}")
+            appendLine("difficulty=${snapshot.difficulty.name}")
+            appendLine("ai=${snapshot.aiPlayerColor?.name ?: "NONE"}")
+            appendLine("current=${snapshot.currentPlayer?.name ?: "NONE"}")
+            appendLine("moves=${moves.size}")
+            appendLine()
+            appendLine("move_history:")
+            moves.forEachIndexed { index, piece ->
+                val color = if (piece.color == PieceColor.BLACK) "B" else "W"
+                appendLine("${index + 1}. $color(${piece.row},${piece.col})")
+            }
+            appendLine()
+            appendLine("board:")
+            append("   ")
+            repeat(Board.SIZE) { col ->
+                append(col.toString().padStart(2, ' '))
+                if (col != Board.SIZE - 1) append(' ')
+            }
+            appendLine()
+            for (row in 0 until Board.SIZE) {
+                append(row.toString().padStart(2, ' '))
+                append(' ')
+                for (col in 0 until Board.SIZE) {
+                    val cell = when (snapshot.board.getPiece(row, col)) {
+                        PieceColor.BLACK -> 'B'
+                        PieceColor.WHITE -> 'W'
+                        null -> '.'
+                    }
+                    append(' ')
+                    append(cell)
+                    append(' ')
+                }
+                appendLine()
+            }
+        }
+    }
+
     fun setDifficulty(difficulty: Difficulty) {
         // 实时持久化到 SharedPreferences，确保退出再进入后难度不丢失
         prefs.edit { putString("selected_difficulty", difficulty.name) }
@@ -1226,6 +1277,67 @@ class GameViewModelV2 @Inject constructor(
         }
         else -> null
     }
+
+    private data class DebugSnapshot(
+        val board: Board,
+        val moveHistory: List<Piece>,
+        val currentPlayer: PieceColor?,
+        val mode: GameMode,
+        val difficulty: Difficulty,
+        val aiPlayerColor: PieceColor?,
+    )
+
+    private fun currentDebugSnapshot(): DebugSnapshot? = when (val s = gameState.value) {
+        is State.WaitingForPlayer -> DebugSnapshot(
+            board = s.board,
+            moveHistory = s.moveHistory,
+            currentPlayer = s.currentPlayer,
+            mode = s.mode,
+            difficulty = s.difficulty,
+            aiPlayerColor = s.aiPlayerColor,
+        )
+        is State.WaitingForAi -> DebugSnapshot(
+            board = s.board,
+            moveHistory = s.moveHistory,
+            currentPlayer = s.currentPlayer,
+            mode = s.mode,
+            difficulty = s.difficulty,
+            aiPlayerColor = s.aiPlayerColor,
+        )
+        is State.GameOver -> DebugSnapshot(
+            board = s.board,
+            moveHistory = s.moveHistory,
+            currentPlayer = null,
+            mode = s.mode,
+            difficulty = s.difficulty,
+            aiPlayerColor = s.aiPlayerColor,
+        )
+        is State.Pausing -> DebugSnapshot(
+            board = s.returnState.board,
+            moveHistory = s.returnState.moveHistory,
+            currentPlayer = s.returnState.currentPlayer,
+            mode = s.returnState.mode,
+            difficulty = s.returnState.difficulty,
+            aiPlayerColor = s.returnState.aiPlayerColor,
+        )
+        is State.Paused -> DebugSnapshot(
+            board = s.returnState.board,
+            moveHistory = s.returnState.moveHistory,
+            currentPlayer = s.returnState.currentPlayer,
+            mode = s.returnState.mode,
+            difficulty = s.returnState.difficulty,
+            aiPlayerColor = s.returnState.aiPlayerColor,
+        )
+        is State.Delaying -> DebugSnapshot(
+            board = s.nextState.board,
+            moveHistory = s.nextState.moveHistory,
+            currentPlayer = s.nextState.currentPlayer,
+            mode = s.nextState.mode,
+            difficulty = s.nextState.difficulty,
+            aiPlayerColor = s.nextState.aiPlayerColor,
+        )
+        else -> null
+    }
     
     // ========================================================================
     // UI 控制
@@ -1315,11 +1427,11 @@ class GameViewModelV2 @Inject constructor(
         rustAi?.let { return it }
         return when (difficulty) {
             // EASY / MEDIUM → Guided MCTS（探索常数 × 100 传给 JNI）
-            Difficulty.EASY   -> RustAi.createMcts(timeLimitMs = 650,   player = aiColorInt, explorationCx100 = 220)
-            Difficulty.MEDIUM -> RustAi.createMcts(timeLimitMs = 1800,  player = aiColorInt, explorationCx100 = 110)
+            Difficulty.EASY   -> RustAi.createMctsAi(timeLimitMs = 650,   player = aiColorInt, explorationCx100 = 220)
+            Difficulty.MEDIUM -> RustAi.createMctsAi(timeLimitMs = 1800,  player = aiColorInt, explorationCx100 = 110)
             // HARD / MASTER → Minimax + Alpha-Beta + 迭代加深
-            Difficulty.HARD   -> RustAi.create(maxDepth = 12, timeLimitMs = 4000,  player = aiColorInt)
-            Difficulty.MASTER -> RustAi.create(maxDepth = 20, timeLimitMs = 12000, player = aiColorInt)
+            Difficulty.HARD   -> RustAi.createMinimaxAi(maxDepth = 12, timeLimitMs = 4000,  player = aiColorInt)
+            Difficulty.MASTER -> RustAi.createMinimaxAi(maxDepth = 20, timeLimitMs = 12000, player = aiColorInt)
         }.also { rustAi = it }
     }
 
@@ -1536,7 +1648,7 @@ class GameViewModelV2 @Inject constructor(
                 // 等待 5 秒：用户若在此期间落子，协程会被 cancelAssistJob() 取消
                 delay(5_000L)
                 // 使用比 HARD 难度（4000ms）稍多的时间限制，深度与 HARD 相当
-                val ai = RustAi.create(
+                val ai = RustAi.createMinimaxAi(
                     maxDepth = 20,
                     timeLimitMs = 12_000,
                     player = if (currentColor == PieceColor.BLACK) 1 else 2

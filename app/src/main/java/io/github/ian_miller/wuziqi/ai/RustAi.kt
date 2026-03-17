@@ -34,7 +34,7 @@ class RustAi private constructor(
          * @param player AI 执棋颜色（1=黑，2=白）
          */
         @JvmStatic
-        fun create(
+        fun createMinimaxAi(
             maxDepth: Int = 4,
             timeLimitMs: Int = 5000,
             player: Int = 1
@@ -42,6 +42,14 @@ class RustAi private constructor(
             val ptr = nativeCreate(maxDepth, timeLimitMs, player)
             return if (ptr != 0L) RustAi(ptr, RustAiConfig(maxDepth, timeLimitMs, player)) else null
         }
+
+        @Deprecated("Use createMinimaxAi()")
+        @JvmStatic
+        fun create(
+            maxDepth: Int = 4,
+            timeLimitMs: Int = 5000,
+            player: Int = 1
+        ): RustAi? = createMinimaxAi(maxDepth, timeLimitMs, player)
         
         /**
          * 创建 MCTS AI 实例（EASY / MEDIUM 难度）
@@ -51,7 +59,7 @@ class RustAi private constructor(
          * @param explorationCx100 UCB1 探索常数 × 100（EASY=200，MEDIUM=120）
          */
         @JvmStatic
-        fun createMcts(
+        fun createMctsAi(
             timeLimitMs: Int,
             player: Int,
             explorationCx100: Int
@@ -59,6 +67,14 @@ class RustAi private constructor(
             val ptr = nativeCreateMcts(timeLimitMs, player, explorationCx100)
             return if (ptr != 0L) RustAi(ptr, RustAiConfig(0, timeLimitMs, player)) else null
         }
+
+        @Deprecated("Use createMctsAi()")
+        @JvmStatic
+        fun createMcts(
+            timeLimitMs: Int,
+            player: Int,
+            explorationCx100: Int
+        ): RustAi? = createMctsAi(timeLimitMs, player, explorationCx100)
 
         /**
          * 测试多实例支持

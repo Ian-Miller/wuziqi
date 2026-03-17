@@ -3,6 +3,8 @@ package io.github.ian_miller.wuziqi.ui.game
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
@@ -103,6 +105,9 @@ fun GameControlsRow(
     onUndo: () -> Unit,
     onAssist: () -> Unit,
     onMenu: (() -> Unit)?,
+    debugBoardCopyVisible: Boolean = false,
+    debugBoardCopied: Boolean = false,
+    onCopyBoard: (() -> Unit)? = null,
     onStartAiFirst: (() -> Unit)? = null,
     onStartPlayerFirst: (() -> Unit)? = null
 ) {
@@ -191,6 +196,24 @@ fun GameControlsRow(
                  Spacer(Modifier.width(8.dp))
                  Text(s.hint, maxLines = 1)
              }
+        }
+
+        AnimatedControlItem(
+            visible = debugBoardCopyVisible && onCopyBoard != null
+        ) {
+            val copyBoardAction = onCopyBoard ?: return@AnimatedControlItem
+            GlassyButton(
+                onClick = copyBoardAction,
+                containerColor = if (debugBoardCopied) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.secondaryContainer
+                }
+            ) {
+                Icon(if (debugBoardCopied) Icons.Filled.Check else Icons.Filled.ContentCopy, null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (debugBoardCopied) s.copied else s.copyBoard, maxLines = 1)
+            }
         }
         
         // Start Buttons (PvE Only here - PvP uses HUD selection)

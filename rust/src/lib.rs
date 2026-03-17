@@ -5,8 +5,8 @@
 //! ## 架构
 //! 
 //! - **lib.rs** (本文件): JNI bridge，处理 Kotlin ↔ Rust 的 FFI 调用
-//! - **ai_engine.rs**: Minimax + Alpha-Beta + 迭代加深 AI（HARD / MASTER 难度）
-//! - **mcts_ai.rs**: Guided MCTS AI（EASY / MEDIUM 难度）
+//! - **algorithm/minimax_ai/**: Minimax + Alpha-Beta + 迭代加深 AI（HARD / MASTER 难度）
+//! - **algorithm/mcts_ai/**: Guided MCTS AI（EASY / MEDIUM 难度）
 //! - **board.rs**: 棋盘表示和规则
 //! - **evaluator.rs**: 棋局评估函数
 //! - **ai.rs**: 搜索算法（minimax 等）
@@ -27,13 +27,12 @@ use jni::JNIEnv;
 
 // 导出内部模块
 mod ai;
-mod ai_engine;
-mod mcts_ai;
+mod algorithm;
 mod board;
 mod evaluator;
 
-use ai_engine::{AiConfig, GomokuAi};
-use mcts_ai::{MctsAi, MctsConfig};
+use algorithm::minimax_ai::{MinimaxAi, MinimaxConfig};
+use algorithm::mcts_ai::{MctsAi, MctsConfig};
 use board::{Board, Color};
 
 // ============================================================================
@@ -44,7 +43,7 @@ use board::{Board, Color};
 /// Box 分配在堆上，通过 `Box::into_raw` 转为 `*mut AnyAi` 传给 Kotlin，
 /// 再由 Kotlin 以 `jlong` 保存并在每次调用时传回。
 enum AnyAi {
-    Minimax(GomokuAi),
+    Minimax(MinimaxAi),
     Mcts(MctsAi),
 }
 
@@ -123,12 +122,12 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeCreate(
     time_limit_ms: jint,
     player: jint,
 ) -> jlong {
-    let config = AiConfig {
+    let config = MinimaxConfig {
         max_depth,
         time_limit_ms: time_limit_ms as u64,
         player: color_from_int(player),
     };
-    let ai = Box::new(AnyAi::Minimax(GomokuAi::new(config)));
+    let ai = Box::new(AnyAi::Minimax(MinimaxAi::new(config)));
     Box::into_raw(ai) as jlong
 }
 
@@ -146,9 +145,9 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeCreateMcts(
     let color = color_from_int(player);
     let exploration_c = exploration_c_x100 as f64 / 100.0;
     let max_children = if exploration_c >= 1.8 {
-        mcts_ai::MAX_CHILDREN_EASY
+        algorithm::mcts_ai::MAX_CHILDREN_EASY
     } else {
-        mcts_ai::MAX_CHILDREN_MEDIUM
+        algorithm::mcts_ai::MAX_CHILDREN_MEDIUM
     };
     let config = MctsConfig {
         player: color,
@@ -328,7 +327,7 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTestMultiIns
     _env: JNIEnv,
     _class: JClass,
 ) -> bool {
-    let ai1 = Box::new(AnyAi::Minimax(GomokuAi::new(AiConfig::default())));
+    let ai1 = Box::new(AnyAi::Minimax(MinimaxAi::new(MinimaxConfig::default())));
     let ai2 = Box::new(AnyAi::Mcts(MctsAi::new(MctsConfig::easy(Color::Black))));
     let ptr1 = Box::into_raw(ai1);
     let ptr2 = Box::into_raw(ai2);

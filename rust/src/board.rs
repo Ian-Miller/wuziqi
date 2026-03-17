@@ -26,6 +26,13 @@ pub struct Board {
     pub move_count: usize,
 }
 
+#[derive(Clone, Copy, Default)]
+struct MoveGenProfile {
+    max_chain: i32,
+    strong_lines: i32,
+    contested_stones: i32,
+}
+
 impl Board {
     pub fn new() -> Self {
         Self {
@@ -119,7 +126,199 @@ impl Board {
         false
     }
 
-    /// 生成候选走法（邻近已有棋子的空位）
+    fn mark_candidate(
+        &self,
+        moves: &mut Vec<(usize, usize)>,
+        marked: &mut [[bool; BOARD_SIZE]; BOARD_SIZE],
+        row: i32,
+        col: i32,
+    ) {
+        if !self.in_bounds(row, col) {
+            return;
+        }
+        let (row, col) = (row as usize, col as usize);
+        if self.cells[row][col] == Color::Empty && !marked[row][col] {
+            marked[row][col] = true;
+            moves.push((row, col));
+        }
+    }
+
+    fn add_radius_candidates(
+        &self,
+        moves: &mut Vec<(usize, usize)>,
+        marked: &mut [[bool; BOARD_SIZE]; BOARD_SIZE],
+        radius: i32,
+    ) {
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                if self.cells[r][c] == Color::Empty {
+                    continue;
+                }
+                for dr in -radius..=radius {
+                    for dc in -radius..=radius {
+                        self.mark_candidate(moves, marked, r as i32 + dr, c as i32 + dc);
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_line_extension_candidates(
+        &self,
+        moves: &mut Vec<(usize, usize)>,
+        marked: &mut [[bool; BOARD_SIZE]; BOARD_SIZE],
+        extension_steps: i32,
+    ) {
+        let dirs = [(1i32, 0i32), (0, 1), (1, 1), (1, -1)];
+
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                let color = self.cells[r][c];
+                if color == Color::Empty {
+                    continue;
+                }
+
+                for &(dr, dc) in &dirs {
+                    let pr = r as i32 - dr;
+                    let pc = c as i32 - dc;
+                    if self.in_bounds(pr, pc) && self.cells[pr as usize][pc as usize] == color {
+                        continue;
+                    }
+
+                    let mut len = 0i32;
+                    let mut rr = r as i32;
+                    let mut cc = c as i32;
+                    while self.in_bounds(rr, cc) && self.cells[rr as usize][cc as usize] == color {
+                        len += 1;
+                        rr += dr;
+                        cc += dc;
+                    }
+
+                    if len < 2 {
+                        continue;
+                    }
+
+                    let left_r = r as i32 - dr;
+                    let left_c = c as i32 - dc;
+                    for step in 0..=extension_steps {
+                        self.mark_candidate(moves, marked, left_r - step * dr, left_c - step * dc);
+                        self.mark_candidate(moves, marked, rr + step * dr, cc + step * dc);
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_hotspot_candidates(
+        &self,
+        moves: &mut Vec<(usize, usize)>,
+        marked: &mut [[bool; BOARD_SIZE]; BOARD_SIZE],
+        radius: i32,
+    ) {
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                let color = self.cells[r][c];
+                if color == Color::Empty {
+                    continue;
+                }
+
+                let mut same_near = 0i32;
+                let mut opp_near = 0i32;
+                for dr in -2i32..=2 {
+                    for dc in -2i32..=2 {
+                        if dr == 0 && dc == 0 {
+                            continue;
+                        }
+                        let nr = r as i32 + dr;
+                        let nc = c as i32 + dc;
+                        if !self.in_bounds(nr, nc) {
+                            continue;
+                        }
+                        match self.cells[nr as usize][nc as usize] {
+                            x if x == color => same_near += 1,
+                            Color::Empty => {}
+                            _ => opp_near += 1,
+                        }
+                    }
+                }
+
+                if same_near == 0 || opp_near == 0 {
+                    continue;
+                }
+
+                for dr in -radius..=radius {
+                    for dc in -radius..=radius {
+                        self.mark_candidate(moves, marked, r as i32 + dr, c as i32 + dc);
+                    }
+                }
+            }
+        }
+    }
+
+    fn movegen_profile(&self) -> MoveGenProfile {
+        let dirs = [(1i32, 0i32), (0, 1), (1, 1), (1, -1)];
+        let mut profile = MoveGenProfile::default();
+
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                let color = self.cells[r][c];
+                if color == Color::Empty {
+                    continue;
+                }
+
+                let mut same_near = 0i32;
+                let mut opp_near = 0i32;
+                for dr in -2i32..=2 {
+                    for dc in -2i32..=2 {
+                        if dr == 0 && dc == 0 {
+                            continue;
+                        }
+                        let nr = r as i32 + dr;
+                        let nc = c as i32 + dc;
+                        if !self.in_bounds(nr, nc) {
+                            continue;
+                        }
+                        match self.cells[nr as usize][nc as usize] {
+                            x if x == color => same_near += 1,
+                            Color::Empty => {}
+                            _ => opp_near += 1,
+                        }
+                    }
+                }
+                if same_near > 0 && opp_near > 0 {
+                    profile.contested_stones += 1;
+                }
+
+                for &(dr, dc) in &dirs {
+                    let pr = r as i32 - dr;
+                    let pc = c as i32 - dc;
+                    if self.in_bounds(pr, pc) && self.cells[pr as usize][pc as usize] == color {
+                        continue;
+                    }
+
+                    let mut len = 0i32;
+                    let mut rr = r as i32;
+                    let mut cc = c as i32;
+                    while self.in_bounds(rr, cc) && self.cells[rr as usize][cc as usize] == color {
+                        len += 1;
+                        rr += dr;
+                        cc += dc;
+                    }
+
+                    if len > profile.max_chain {
+                        profile.max_chain = len;
+                    }
+                    if len >= 3 {
+                        profile.strong_lines += 1;
+                    }
+                }
+            }
+        }
+
+        profile
+    }
+
+    /// 生成候选走法（按局面阶段动态收放候选区域）
     pub fn generate_moves(&self) -> Vec<(usize, usize)> {
         let mut moves = Vec::new();
         let mut marked = [[false; BOARD_SIZE]; BOARD_SIZE];
@@ -129,27 +328,38 @@ impl Board {
             moves.push((7, 7));
             return moves;
         }
-        
-        // 遍历所有棋子，标记周围空位
-        for r in 0..BOARD_SIZE {
-            for c in 0..BOARD_SIZE {
-                if self.cells[r][c] != Color::Empty {
-                    // 标记周围2格范围内的空位
-                    for dr in -2..=2 {
-                        for dc in -2..=2 {
-                            let nr = r as i32 + dr;
-                            let nc = c as i32 + dc;
-                            if self.in_bounds(nr, nc) {
-                                let (nr, nc) = (nr as usize, nc as usize);
-                                if self.cells[nr][nc] == Color::Empty && !marked[nr][nc] {
-                                    marked[nr][nc] = true;
-                                    moves.push((nr, nc));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+
+        let profile = self.movegen_profile();
+        let tactical_pressure = profile.max_chain >= 4 || profile.strong_lines >= 3;
+        let contested = profile.contested_stones >= 6;
+        let base_radius = if self.move_count <= 8 {
+            2
+        } else if tactical_pressure || contested {
+            2
+        } else if self.move_count <= 42 {
+            1
+        } else {
+            2
+        };
+        let extension_steps = if profile.max_chain >= 4 || profile.strong_lines >= 2 {
+            2
+        } else {
+            1
+        };
+
+        self.add_radius_candidates(&mut moves, &mut marked, base_radius);
+        self.add_line_extension_candidates(&mut moves, &mut marked, extension_steps);
+
+        if contested {
+            self.add_hotspot_candidates(&mut moves, &mut marked, 1);
+        }
+
+        if self.move_count <= 16 || moves.len() < 14 || tactical_pressure {
+            self.add_radius_candidates(&mut moves, &mut marked, 2);
+        }
+
+        if (self.move_count >= 36 || contested) && moves.len() < 20 {
+            self.add_radius_candidates(&mut moves, &mut marked, 2);
         }
         
         // 如果没有候选（极少见），返回所有空位
