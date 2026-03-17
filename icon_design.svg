@@ -21,9 +21,9 @@
       <stop offset="0%" stop-color="#faf5ec" stop-opacity="0.95"/>
       <stop offset="100%" stop-color="#e8d9be" stop-opacity="0.92"/>
     </radialGradient>
-    <!-- Clip path for magnifier: partially off-canvas at bottom-right corner -->
+    <!-- Clip path for magnifier: center (393,393) r=165, arc grazes both background pieces -->
     <clipPath id="lensClip">
-      <circle cx="450" cy="450" r="105"/>
+      <circle cx="393" cy="393" r="165"/>
     </clipPath>
     <!-- Drop shadow filter for magnifier -->
     <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
@@ -68,33 +68,36 @@
   <circle cx="320" cy="192" r="46" fill="none" stroke="#999898" stroke-width="2" stroke-opacity="0.5"/>
   <ellipse cx="306" cy="178" rx="13" ry="9" fill="white" fill-opacity="0.75"/>
 
-  <!-- ── Magnifier (bottom-right corner, partially clipped) ── -->
-  <!-- No handle. Center at (450,450), r=105 → extends to ~555 both axes; clipped by canvas at x=512, y=512 -->
+  <!-- ── Magnifier (bottom-right, partially canvas-clipped) ── -->
+  <!-- Center (393,393) r=165: left/top arc grazes background pieces at (192,320) and (320,192) by ~3px -->
   <!-- Shadow halo -->
-  <circle cx="450" cy="450" r="112" fill="#00000038" filter="url(#shadow)"/>
+  <circle cx="393" cy="393" r="172" fill="#00000038" filter="url(#shadow)"/>
   <!-- Lens glass -->
-  <circle cx="450" cy="450" r="105" fill="url(#lensGrad)"/>
+  <circle cx="393" cy="393" r="165" fill="url(#lensGrad)"/>
 
   <!-- Zoomed content inside lens ─ clipped to lens circle -->
   <g clip-path="url(#lensClip)">
-    <!-- Board tint -->
-    <rect x="340" y="340" width="220" height="220" fill="#D4A96A" fill-opacity="0.65"/>
-    <!-- Zoomed grid: 2 horizontal + 2 vertical lines, spacing ~80px -->
-    <line x1="340" y1="394" x2="560" y2="394" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <line x1="340" y1="474" x2="560" y2="474" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <line x1="394" y1="340" x2="394" y2="560" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <line x1="474" y1="340" x2="474" y2="560" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
-    <!-- Zoomed black piece at intersection (394, 394) -->
-    <circle cx="394" cy="394" r="24" fill="url(#blackPiece)"/>
-    <ellipse cx="386" cy="386" rx="7" ry="5" fill="white" fill-opacity="0.28"/>
-    <!-- Zoomed white piece at intersection (474, 394) -->
-    <circle cx="474" cy="394" r="24" fill="url(#whitePiece)"/>
-    <circle cx="474" cy="394" r="24" fill="none" stroke="#999898" stroke-width="1.5" stroke-opacity="0.5"/>
-    <ellipse cx="466" cy="386" rx="7" ry="5" fill="white" fill-opacity="0.75"/>
+    <!-- Board tint (semi-transparent warm overlay distinguishes lens area) -->
+    <rect x="225" y="225" width="350" height="350" fill="#D4A96A" fill-opacity="0.58"/>
+    <!-- Grid lines: match actual background grid at x=320, x=448, y=320, y=448 -->
+    <line x1="225" y1="320" x2="565" y2="320" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <line x1="225" y1="448" x2="565" y2="448" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <line x1="320" y1="225" x2="320" y2="565" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <line x1="448" y1="225" x2="448" y2="565" stroke="#5C3D1A" stroke-width="5" stroke-opacity="0.75"/>
+    <!-- Hoshi dots at the two empty intersections -->
+    <circle cx="448" cy="320" r="8" fill="#5C3D1A" fill-opacity="0.55"/>
+    <circle cx="320" cy="448" r="8" fill="#5C3D1A" fill-opacity="0.55"/>
+    <!-- Black piece at top-left intersection (320, 320) -->
+    <circle cx="320" cy="320" r="40" fill="url(#blackPiece)"/>
+    <ellipse cx="307" cy="307" rx="13" ry="9" fill="white" fill-opacity="0.28"/>
+    <!-- White piece at bottom-right intersection (448, 448) — fully on canvas (448+40=488<512) -->
+    <circle cx="448" cy="448" r="40" fill="url(#whitePiece)"/>
+    <circle cx="448" cy="448" r="40" fill="none" stroke="#999898" stroke-width="2" stroke-opacity="0.5"/>
+    <ellipse cx="435" cy="435" rx="13" ry="9" fill="white" fill-opacity="0.75"/>
   </g>
 
   <!-- Lens rim -->
-  <circle cx="450" cy="450" r="105" fill="none" stroke="#8B6914" stroke-width="9"/>
+  <circle cx="393" cy="393" r="165" fill="none" stroke="#8B6914" stroke-width="9"/>
   <!-- Inner lens sheen -->
-  <circle cx="450" cy="450" r="103" fill="none" stroke="white" stroke-width="2.5" stroke-opacity="0.35"/>
+  <circle cx="393" cy="393" r="163" fill="none" stroke="white" stroke-width="2.5" stroke-opacity="0.35"/>
 </svg>
