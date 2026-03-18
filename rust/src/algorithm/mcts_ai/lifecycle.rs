@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::algorithm::lifecycle::{HeartbeatConfig, ProgressState, SearchLifecycle};
+use crate::algorithm::lifecycle::{HeartbeatConfig, ProgressState, SearchLifecycle, TurnOutcome, TurnStatus};
 use crate::algorithm::shared_tactics::{find_immediate_win, find_must_block};
 
 impl SearchLifecycle for MctsAi {
@@ -31,25 +31,26 @@ impl SearchLifecycle for MctsAi {
 }
 
 impl MctsAi {
-    pub fn take_turn_with_progress(
+    pub fn take_turn_with_progress_result(
         &mut self,
         board: &Board,
         on_progress: &mut Option<&mut dyn FnMut(i32)>,
-    ) -> Option<(usize, usize)> {
+    ) -> TurnOutcome {
         self.start_time = Instant::now();
+        self.best_move_encoded.store(-1, std::sync::atomic::Ordering::Relaxed);
 
         let mut progress = ProgressState::new();
         self.maybe_report_progress(on_progress, 0, &mut progress, true);
 
         if let Some(m) = self.opening_book(board) {
             self.maybe_report_progress(on_progress, 100, &mut progress, true);
-            return Some(m);
+            return self.turn_outcome(Some(m), TurnStatus::Completed);
         }
 
         let all_moves = board.generate_moves();
         if all_moves.is_empty() {
             self.maybe_report_progress(on_progress, 100, &mut progress, true);
-            return None;
+            return self.turn_outcome(None, TurnStatus::NoMove);
         }
 
         let mut candidates = top_k_moves(board, self.config.player, self.config.max_children);
@@ -64,7 +65,7 @@ impl MctsAi {
         }
         if candidates.is_empty() {
             self.maybe_report_progress(on_progress, 100, &mut progress, true);
-            return None;
+            return self.turn_outcome(None, TurnStatus::NoMove);
         }
 
         if let Some(m) = find_immediate_win(board, &candidates, self.config.player) {
@@ -73,7 +74,7 @@ impl MctsAi {
                 && self.roll(EASY_DIAGONAL_MISS_ATTACK);
             if !diag_miss {
                 self.maybe_report_progress(on_progress, 100, &mut progress, true);
-                return Some(m);
+                return self.turn_outcome(Some(m), TurnStatus::Completed);
             }
         }
 
@@ -83,7 +84,7 @@ impl MctsAi {
                 && self.roll(EASY_DIAGONAL_MISS_DEFENSE);
             if !diag_miss {
                 self.maybe_report_progress(on_progress, 100, &mut progress, true);
-                return Some(m);
+                return self.turn_outcome(Some(m), TurnStatus::Completed);
             }
         }
 
@@ -98,7 +99,7 @@ impl MctsAi {
                     && self.roll(EASY_DIAGONAL_MISS_ATTACK + 0.10);
                 if !diag_miss {
                     self.maybe_report_progress(on_progress, 100, &mut progress, true);
-                    return Some(m);
+                    return self.turn_outcome(Some(m), TurnStatus::Completed);
                 }
             }
         }
@@ -110,14 +111,29 @@ impl MctsAi {
                     && self.roll(EASY_DIAGONAL_MISS_DEFENSE + 0.10);
                 if !diag_miss {
                     self.maybe_report_progress(on_progress, 100, &mut progress, true);
-                    return Some(m);
+                    return self.turn_outcome(Some(m), TurnStatus::Completed);
                 }
             }
         }
 
         let mv = self.mcts_search(board, on_progress, &mut progress);
         self.maybe_report_progress(on_progress, 100, &mut progress, true);
-        mv
+        let status = self.abort_reason().map(TurnStatus::from).unwrap_or_else(|| {
+            if mv.is_some() {
+                TurnStatus::Completed
+            } else {
+                TurnStatus::NoMove
+            }
+        });
+        self.turn_outcome(mv, status)
+    }
+
+    pub fn take_turn_with_progress(
+        &mut self,
+        board: &Board,
+        on_progress: &mut Option<&mut dyn FnMut(i32)>,
+    ) -> Option<(usize, usize)> {
+        self.take_turn_with_progress_result(board, on_progress).best_move
     }
 
     pub fn new(config: MctsConfig) -> Self {
@@ -150,6 +166,11 @@ impl MctsAi {
     pub fn take_turn(&mut self, board: &Board) -> Option<(usize, usize)> {
         let mut none: Option<&mut dyn FnMut(i32)> = None;
         self.take_turn_with_progress(board, &mut none)
+    }
+
+    pub fn take_turn_result(&mut self, board: &Board) -> TurnOutcome {
+        let mut none: Option<&mut dyn FnMut(i32)> = None;
+        self.take_turn_with_progress_result(board, &mut none)
     }
 
     pub fn invalidate(&self) {
@@ -197,5 +218,18 @@ impl MctsAi {
             return true;
         }
         self.rand_f64() < p
+    }
+
+    fn turn_outcome(&self, best_move: Option<(usize, usize)>, status: TurnStatus) -> TurnOutcome {
+        if let Some((row, col)) = best_move {
+            self.best_move_encoded.store((row * 15 + col) as i32, std::sync::atomic::Ordering::Relaxed);
+        }
+        TurnOutcome {
+            best_move,
+            status,
+            completed_depth: 0,
+            elapsed_ms: self.elapsed_ms(),
+            node_count: 0,
+        }
     }
 }

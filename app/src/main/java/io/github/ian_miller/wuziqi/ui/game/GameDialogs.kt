@@ -12,15 +12,15 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -125,9 +125,9 @@ fun SettingsDialog(
             }
             
             // Settings Rows with consistent styling
-            SettingsSwitchRow(s.sound, Icons.Filled.VolumeUp, soundEnabled, onToggleSound)
+            SettingsSwitchRow(s.sound, Icons.AutoMirrored.Filled.VolumeUp, soundEnabled, onToggleSound)
             SettingsSwitchRow(s.vibration, Icons.Filled.Vibration, vibrationEnabled, onToggleVibration)
-            SettingsSwitchRow(s.allowUndo, Icons.Filled.Undo, undoEnabled, onToggleUndo)
+            SettingsSwitchRow(s.allowUndo, Icons.AutoMirrored.Filled.Undo, undoEnabled, onToggleUndo)
             
             // AI Assist: Show in Main Menu OR VS_HUMAN Mode
             if (isMainMenu || selectedMode == GameMode.VS_HUMAN) {
@@ -200,7 +200,7 @@ fun SettingsDialog(
                         ),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Icon(Icons.Filled.ExitToApp, null)
+                        Icon(Icons.AutoMirrored.Filled.ExitToApp, null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(s.exitGame)
                     }
@@ -216,6 +216,7 @@ fun SettingsDialog(
                     ),
                     shape = RoundedCornerShape(8.dp)
                 ) {
+
                     Text(s.done, style = MaterialTheme.typography.titleMedium)
                 }
             }
@@ -387,7 +388,7 @@ fun PlayerSelectionDialog(
                         Text("查看 ${selectedPlayer.name} 的详细战绩")
                     }
                     Spacer(modifier = Modifier.height(16.dp))
-                    Divider()
+                    HorizontalDivider()
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
@@ -507,7 +508,7 @@ fun GameMenuDialog(
                         modifier = buttonModifier,
                         colors = secondaryButtonColors
                     ) {
-                        Icon(Icons.Filled.Undo, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
                         Text("撤销一步", style = MaterialTheme.typography.titleMedium)
                     }
@@ -556,7 +557,7 @@ fun GameMenuDialog(
                     ),
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
                 ) {
-                    Icon(Icons.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("退出到主菜单", style = MaterialTheme.typography.titleMedium)
                 }

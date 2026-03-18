@@ -1,5 +1,16 @@
 use super::*;
-use crate::algorithm::lifecycle::{ProgressState, SearchLifecycle};
+use crate::algorithm::lifecycle::{ProgressState, SearchAbort, SearchLifecycle, TurnStatus};
+
+pub(super) struct IterativeDeepeningResult {
+    pub(super) best_move: (usize, usize),
+    pub(super) status: TurnStatus,
+}
+
+pub(super) struct SearchDepthOutcome {
+    best_move: (usize, usize),
+    found_win: bool,
+    root_score: i32,
+}
 
 impl MinimaxAi {
     pub(super) fn iterative_deepening(
@@ -8,14 +19,19 @@ impl MinimaxAi {
         moves: &[(usize, usize)],
         on_progress: &mut Option<&mut dyn FnMut(i32)>,
         progress: &mut ProgressState,
-    ) -> (usize, usize) {
+    ) -> IterativeDeepeningResult {
         let mut best_move = moves[0];
         let mut last_layer_ms: u64 = 1;
         let root_hash = self.zobrist.hash_board(board);
         let mut current_depth = 1;
+        let mut status = TurnStatus::Completed;
 
         loop {
-            if current_depth > self.config.max_depth || !self.time_ok() {
+            if current_depth > self.config.max_depth {
+                break;
+            }
+            if let Some(reason) = self.abort_reason() {
+                status = reason.into();
                 break;
             }
             if current_depth > 1 && !self.can_afford_depth(last_layer_ms) {
@@ -32,7 +48,7 @@ impl MinimaxAi {
                 beta0 = self.last_root_score + margin;
             }
 
-            let (mut d_best, mut done, mut win, mut root_score) = self.search_one_depth(
+            let mut depth_outcome = match self.search_one_depth(
                 board,
                 moves,
                 current_depth,
@@ -42,102 +58,122 @@ impl MinimaxAi {
                 beta0,
                 on_progress,
                 progress,
-            );
+            ) {
+                Ok(outcome) => outcome,
+                Err(reason) => {
+                    status = reason.into();
+                    break;
+                }
+            };
 
-            while done
+            while current_depth >= 4
                 && current_depth >= 4
                 && attempt < ASPIRATION_RETRY_MAX
-                && (root_score <= alpha0 || root_score >= beta0)
-                && self.time_ok()
+                && (depth_outcome.root_score <= alpha0 || depth_outcome.root_score >= beta0)
             {
+                if let Some(reason) = self.abort_reason() {
+                    status = reason.into();
+                    break;
+                }
                 attempt += 1;
                 margin += ASPIRATION_MARGIN_STEP;
                 alpha0 = self.last_root_score - margin;
                 beta0 = self.last_root_score + margin;
-                let (b2, d2, w2, s2) = self.search_one_depth(
+                depth_outcome = match self.search_one_depth(
                     board,
                     moves,
                     current_depth,
-                    d_best,
+                    depth_outcome.best_move,
                     root_hash,
                     alpha0,
                     beta0,
                     on_progress,
                     progress,
-                );
-                d_best = b2;
-                done = d2;
-                win = w2;
-                root_score = s2;
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(reason) => {
+                        status = reason.into();
+                        break;
+                    }
+                };
             }
 
-            if done
-                && current_depth >= 4
-                && (root_score <= alpha0 || root_score >= beta0)
-                && self.time_ok()
+            if status != TurnStatus::Completed {
+                break;
+            }
+
+            if current_depth >= 4
+                && (depth_outcome.root_score <= alpha0 || depth_outcome.root_score >= beta0)
             {
-                let (b3, d3, w3, s3) = self.search_one_depth(
+                if let Some(reason) = self.abort_reason() {
+                    status = reason.into();
+                    break;
+                }
+
+                depth_outcome = match self.search_one_depth(
                     board,
                     moves,
                     current_depth,
-                    d_best,
+                    depth_outcome.best_move,
                     root_hash,
                     i32::MIN + 1,
                     i32::MAX - 1,
                     on_progress,
                     progress,
-                );
-                d_best = b3;
-                done = d3;
-                win = w3;
-                root_score = s3;
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(reason) => {
+                        status = reason.into();
+                        break;
+                    }
+                };
             }
 
-            if done {
-                best_move = d_best;
-                self.best_move_encoded
-                    .store((best_move.0 * 15 + best_move.1) as i32, Ordering::Relaxed);
-                self.last_root_score = root_score;
-                let elapsed_ms = (self.start_time.elapsed().as_millis() as u64 - t).max(1);
-                last_layer_ms = elapsed_ms;
-                self.last_completed_depth = current_depth;
-                self.last_depth_time_ms = elapsed_ms;
-
-                let depth_ratio = if self.config.max_depth > 0 {
-                    (current_depth as f64 / self.config.max_depth as f64).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let time_ratio = (self.start_time.elapsed().as_millis() as f64
-                    / self.turn_time_limit_ms.max(1) as f64)
-                    .clamp(0.0, 1.0);
-                let blended = (depth_ratio.max(time_ratio) * 97.0).round() as i32;
-                self.maybe_report_progress(
-                    on_progress,
-                    blended.clamp(0, 97),
-                    progress,
-                    false,
-                );
-
-                if win {
-                    break;
-                }
-
-                let remaining = self
-                    .turn_time_limit_ms
-                    .saturating_sub(self.start_time.elapsed().as_millis() as u64);
-
-                current_depth += if remaining > last_layer_ms * FAST_JUMP_RATIO { 2 } else { 1 };
-            } else {
+            if status != TurnStatus::Completed {
                 break;
             }
+
+            best_move = depth_outcome.best_move;
+            self.best_move_encoded
+                .store((best_move.0 * 15 + best_move.1) as i32, Ordering::Relaxed);
+            self.last_root_score = depth_outcome.root_score;
+            let elapsed_ms = (self.start_time.elapsed().as_millis() as u64 - t).max(1);
+            last_layer_ms = elapsed_ms;
+            self.last_completed_depth = current_depth;
+            self.last_depth_time_ms = elapsed_ms;
+
+            let depth_ratio = if self.config.max_depth > 0 {
+                (current_depth as f64 / self.config.max_depth as f64).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let time_ratio = (self.start_time.elapsed().as_millis() as f64
+                / self.turn_time_limit_ms.max(1) as f64)
+                .clamp(0.0, 1.0);
+            let blended = (depth_ratio.max(time_ratio) * 97.0).round() as i32;
+            self.maybe_report_progress(
+                on_progress,
+                blended.clamp(0, 97),
+                progress,
+                false,
+            );
+
+            if depth_outcome.found_win {
+                break;
+            }
+
+            let remaining = self
+                .turn_time_limit_ms
+                .saturating_sub(self.start_time.elapsed().as_millis() as u64);
+
+            current_depth += if remaining > last_layer_ms * FAST_JUMP_RATIO { 2 } else { 1 };
         }
 
         self.remember_root_decision(root_hash, best_move);
-        best_move
+        IterativeDeepeningResult { best_move, status }
     }
 
-    fn search_one_depth(
+    pub(super) fn search_one_depth(
         &mut self,
         board: &Board,
         moves: &[(usize, usize)],
@@ -148,9 +184,9 @@ impl MinimaxAi {
         beta: i32,
         on_progress: &mut Option<&mut dyn FnMut(i32)>,
         progress: &mut ProgressState,
-    ) -> ((usize, usize), bool, bool, i32) {
+    ) -> Result<SearchDepthOutcome, SearchAbort> {
         let mut best = fallback;
-        let mut timed_out = false;
+        let mut best_heuristic = self.heuristic_score(board, fallback.0, fallback.1);
         let mut found_win = false;
 
         let tt_best = self.tt.get(root_hash).and_then(|e| e.2);
@@ -169,9 +205,8 @@ impl MinimaxAi {
         };
 
         for &(row, col) in &ordered {
-            if !self.time_ok() {
-                timed_out = true;
-                break;
+            if let Some(reason) = self.abort_reason() {
+                return Err(reason);
             }
 
             let mut new_board = board.clone();
@@ -180,7 +215,11 @@ impl MinimaxAi {
             }
 
             if new_board.check_win(row, col, self.config.player) {
-                return ((row, col), true, true, WIN_SCORE + depth);
+                return Ok(SearchDepthOutcome {
+                    best_move: (row, col),
+                    found_win: true,
+                    root_score: WIN_SCORE + depth,
+                });
             }
 
             let child_hash = self.zobrist.hash_move(root_hash, row, col, self.config.player);
@@ -195,7 +234,7 @@ impl MinimaxAi {
                 Some((row, col)),
                 on_progress,
                 progress,
-            );
+            )?;
 
             let adjusted_score = if self.config.max_depth >= 12 {
                 let penalty = self.root_repetition_penalty(root_hash, (row, col));
@@ -208,9 +247,23 @@ impl MinimaxAi {
                 score
             };
 
+            let candidate_heuristic = if self.config.max_depth >= 20 {
+                self.heuristic_score(board, row, col)
+            } else {
+                0
+            };
+
             if adjusted_score > alpha {
                 alpha = adjusted_score;
                 best = (row, col);
+                best_heuristic = candidate_heuristic;
+            } else if self.config.max_depth >= 20
+                && adjusted_score == alpha
+                && board.move_count >= 24
+                && candidate_heuristic > best_heuristic
+            {
+                best = (row, col);
+                best_heuristic = candidate_heuristic;
             }
 
             if alpha >= KILL_THRESHOLD {
@@ -219,11 +272,13 @@ impl MinimaxAi {
             }
         }
 
-        if !timed_out {
-            self.tt.set(root_hash, depth, alpha, Some(best), TtFlag::Exact);
-        }
+        self.tt.set(root_hash, depth, alpha, Some(best), TtFlag::Exact);
 
-        (best, !timed_out, found_win, alpha)
+        Ok(SearchDepthOutcome {
+            best_move: best,
+            found_win,
+            root_score: alpha,
+        })
     }
 
     fn suppress_root_redundancy(&self, ordered: &[(usize, usize)]) -> Vec<(usize, usize)> {
@@ -291,17 +346,15 @@ impl MinimaxAi {
         last_move: Option<(usize, usize)>,
         on_progress: &mut Option<&mut dyn FnMut(i32)>,
         progress: &mut ProgressState,
-    ) -> i32 {
+    ) -> Result<i32, SearchAbort> {
         let tick = self.node_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if !self.heartbeat(tick, on_progress, progress) {
-            return 0;
-        }
+        self.heartbeat(tick, on_progress, progress)?;
 
         let orig_alpha = alpha;
         if let Some((entry_depth, entry_score, _, entry_flag)) = self.tt.get(hash) {
             if entry_depth >= depth {
                 match entry_flag {
-                    TtFlag::Exact => return entry_score,
+                    TtFlag::Exact => return Ok(entry_score),
                     TtFlag::LowerBound => {
                         if entry_score > alpha {
                             alpha = entry_score;
@@ -309,7 +362,7 @@ impl MinimaxAi {
                     }
                     TtFlag::UpperBound => {
                         if entry_score <= alpha {
-                            return entry_score;
+                            return Ok(entry_score);
                         }
                         if entry_score < beta {
                             beta = entry_score;
@@ -317,7 +370,7 @@ impl MinimaxAi {
                     }
                 }
                 if alpha >= beta {
-                    return alpha;
+                    return Ok(alpha);
                 }
             }
         }
@@ -332,12 +385,12 @@ impl MinimaxAi {
                 v
             };
             self.tt.set(hash, 0, ev, None, TtFlag::Exact);
-            return ev;
+            return Ok(ev);
         }
 
         let raw = board.generate_moves();
         if raw.is_empty() {
-            return 0;
+            return Ok(0);
         }
 
         let tt_best_move = self.tt.get(hash).and_then(|e| e.2);
@@ -366,9 +419,7 @@ impl MinimaxAi {
         for (idx, ((row, col), move_hint_score)) in moves.iter().enumerate() {
             let (row, col) = (*row, *col);
             let tick = self.node_count.fetch_add(1, Ordering::Relaxed) + 1;
-            if !self.heartbeat(tick, on_progress, progress) {
-                return alpha;
-            }
+            self.heartbeat(tick, on_progress, progress)?;
 
             if !board.place(row, col, player) {
                 continue;
@@ -378,7 +429,7 @@ impl MinimaxAi {
                 let win_score = WIN_SCORE + depth;
                 board.unplace(row, col);
                 self.tt.set(hash, depth, win_score, Some((row, col)), TtFlag::Exact);
-                return win_score;
+                return Ok(win_score);
             }
 
             let child_hash = self.zobrist.hash_move(hash, row, col, player);
@@ -387,7 +438,7 @@ impl MinimaxAi {
             let search_depth = (depth - 1 - reduce).max(0);
 
             let mut score = if first_move {
-                -self.minimax(
+                match self.minimax(
                     board,
                     player.opponent(),
                     search_depth,
@@ -398,9 +449,15 @@ impl MinimaxAi {
                     Some((row, col)),
                     on_progress,
                     progress,
-                )
+                ) {
+                    Ok(v) => -v,
+                    Err(reason) => {
+                        board.unplace(row, col);
+                        return Err(reason);
+                    }
+                }
             } else {
-                let mut s = -self.minimax(
+                let mut s = match self.minimax(
                     board,
                     player.opponent(),
                     search_depth,
@@ -411,9 +468,15 @@ impl MinimaxAi {
                     Some((row, col)),
                     on_progress,
                     progress,
-                );
+                ) {
+                    Ok(v) => -v,
+                    Err(reason) => {
+                        board.unplace(row, col);
+                        return Err(reason);
+                    }
+                };
                 if s > alpha && s < beta {
-                    s = -self.minimax(
+                    s = match self.minimax(
                         board,
                         player.opponent(),
                         search_depth,
@@ -424,13 +487,19 @@ impl MinimaxAi {
                         Some((row, col)),
                         on_progress,
                         progress,
-                    );
+                    ) {
+                        Ok(v) => -v,
+                        Err(reason) => {
+                            board.unplace(row, col);
+                            return Err(reason);
+                        }
+                    };
                 }
                 s
             };
 
             if reduce > 0 && score > alpha {
-                score = -self.minimax(
+                score = match self.minimax(
                     board,
                     player.opponent(),
                     depth - 1,
@@ -441,7 +510,13 @@ impl MinimaxAi {
                     Some((row, col)),
                     on_progress,
                     progress,
-                );
+                ) {
+                    Ok(v) => -v,
+                    Err(reason) => {
+                        board.unplace(row, col);
+                        return Err(reason);
+                    }
+                };
             }
 
             board.unplace(row, col);
@@ -455,7 +530,7 @@ impl MinimaxAi {
                 self.record_killer(ply, (row, col));
                 self.bump_history(player, row, col, depth);
                 self.tt.set(hash, depth, alpha, best_move, TtFlag::LowerBound);
-                return alpha;
+                return Ok(alpha);
             }
         }
 
@@ -465,6 +540,6 @@ impl MinimaxAi {
             TtFlag::Exact
         };
         self.tt.set(hash, depth, alpha, best_move, flag);
-        alpha
+        Ok(alpha)
     }
 }

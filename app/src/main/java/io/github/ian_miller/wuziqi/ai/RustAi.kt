@@ -97,14 +97,35 @@ class RustAi private constructor(
     private external fun nativeDestroy(ptr: Long)
     private external fun nativeClear(ptr: Long)
     private external fun nativeTakeTurn(ptr: Long, boardData: ByteArray): Int
+    private external fun nativeTakeTurnResult(ptr: Long, boardData: ByteArray): LongArray?
     private external fun nativeTakeTurnWithProgress(
         ptr: Long,
         boardData: ByteArray,
         callback: ProgressCallback?
     ): Int
+    private external fun nativeTakeTurnWithProgressResult(
+        ptr: Long,
+        boardData: ByteArray,
+        callback: ProgressCallback?
+    ): LongArray?
     private external fun nativeInvalidate(ptr: Long)
     private external fun nativeValidate(ptr: Long)
     private external fun nativeGetBestMove(ptr: Long): Int
+
+    enum class TurnStatus {
+        COMPLETED,
+        TIMEOUT,
+        CANCELLED,
+        NO_MOVE,
+    }
+
+    data class TurnResult(
+        val move: Pair<Int, Int>?,
+        val status: TurnStatus,
+        val completedDepth: Int,
+        val elapsedMs: Long,
+        val nodeCount: Long,
+    )
     
     /**
      * 执行思考（takeTurn）
@@ -116,17 +137,49 @@ class RustAi private constructor(
         board: ByteArray,
         onProgress: ((Int) -> Unit)? = null
     ): Pair<Int, Int>? {
+        val result = takeTurnDetailed(board, onProgress)
+        return when (result.status) {
+            TurnStatus.CANCELLED, TurnStatus.NO_MOVE -> null
+            TurnStatus.COMPLETED, TurnStatus.TIMEOUT -> result.move
+        }
+    }
+
+    fun takeTurnDetailed(
+        board: ByteArray,
+        onProgress: ((Int) -> Unit)? = null
+    ): TurnResult {
         checkDestroyed()
-        val result = if (onProgress == null) {
-            nativeTakeTurn(nativePtr, board)
+        val raw = if (onProgress == null) {
+            nativeTakeTurnResult(nativePtr, board)
         } else {
-            nativeTakeTurnWithProgress(
+            nativeTakeTurnWithProgressResult(
                 nativePtr,
                 board,
                 ProgressCallback { p -> onProgress(p.coerceIn(0, 100)) }
             )
         }
-        return if (result >= 0) result.toPosition() else null
+        return decodeTurnResult(raw)
+    }
+
+    private fun decodeTurnResult(raw: LongArray?): TurnResult {
+        if (raw == null || raw.size < 5) {
+            return TurnResult(null, TurnStatus.CANCELLED, 0, 0L, 0L)
+        }
+        val status = when (raw[0].toInt()) {
+            0 -> TurnStatus.COMPLETED
+            1 -> TurnStatus.TIMEOUT
+            2 -> TurnStatus.CANCELLED
+            3 -> TurnStatus.NO_MOVE
+            else -> TurnStatus.CANCELLED
+        }
+        val move = raw[1].toInt().toPosition()
+        return TurnResult(
+            move = move,
+            status = status,
+            completedDepth = raw[2].toInt(),
+            elapsedMs = raw[3],
+            nodeCount = raw[4],
+        )
     }
     
     /**

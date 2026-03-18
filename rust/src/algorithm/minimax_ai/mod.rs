@@ -60,6 +60,14 @@ const AFFORD_RATIO: u64 = 3;
 const VCF_DEPTH_HARD: i32 = 10;
 const VCF_DEPTH_MASTER: i32 = 20;
 
+/// 组合威胁搜索最大层数（攻击方与防守方各一步约消耗 2 层）。
+/// 仅用于 MASTER，覆盖“跳冲四 + 活三 / 双活三 / 三四”这类比纯 VCF 更宽的强制线。
+const COMPOUND_FORCE_DEPTH_MASTER: i32 = 6;
+
+/// 组合威胁搜索的候选裁剪，避免把普通活三全部并入后导致分支爆炸。
+const COMPOUND_ATTACK_CANDIDATES: usize = 5;
+const COMPOUND_DEFENSE_CANDIDATES: usize = 8;
+
 /// 根节点 Aspiration Window 参数
 const ASPIRATION_MARGIN_BASE: i32 = 1_200;
 const ASPIRATION_MARGIN_STEP: i32 = 2_000;
@@ -79,5 +87,5 @@ const DECISION_HISTORY_CAP: usize = 24;
 /// Killer/History Heuristic 参数
 const MAX_PLY: usize = 64;
 const HISTORY_MAX: i32 = 2_000_000;
-const LOCAL_EVAL_RADIUS: i32 = 3;
+const LOCAL_EVAL_RADIUS: i32 = 4;
 

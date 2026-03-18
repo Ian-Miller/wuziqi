@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -18,7 +19,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import io.github.ian_miller.wuziqi.domain.model.Difficulty
 import io.github.ian_miller.wuziqi.domain.model.GameMode
 import io.github.ian_miller.wuziqi.domain.repository.Player
@@ -63,7 +64,7 @@ fun PlayerProfileScreen(
                 title = { Text(s.playerCenter, color = Color(0xFF3E2723), fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color(0xFF3E2723))
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color(0xFF3E2723))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
@@ -280,7 +281,7 @@ fun PlayerProfileScreen(
                                 modifier = Modifier.clickable { viewModel.selectPlayer(player) }
                             )
                             if (player != players.last()) {
-                                Divider(color = Color(0xFF3E2723).copy(alpha = 0.1f))
+                                HorizontalDivider(color = Color(0xFF3E2723).copy(alpha = 0.1f))
                             }
                         }
                     }

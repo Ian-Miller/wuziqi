@@ -1,5 +1,7 @@
 use super::*;
-use super::fixtures::board_with_moves;
+use super::fixtures::{board_with_moves, master_issue_two_prefix_board};
+use crate::algorithm::lifecycle::ProgressState;
+use std::sync::atomic::Ordering;
 
 #[test]
 fn evaluate_position_keeps_four_combo_bonus() {
@@ -152,4 +154,104 @@ fn critical_block_prefers_denser_contested_endpoint() {
     assert_eq!(left_score, right_score, "left_score={left_score}, right_score={right_score}");
     assert!(left_density > right_density, "left_density={left_density}, right_density={right_density}");
     assert_eq!(best_block, Some((8, 5)), "left_density={left_density}, right_density={right_density}, best={best_block:?}");
+}
+
+#[test]
+fn master_late_game_budget_is_capped() {
+    let board = master_issue_two_prefix_board(47);
+    let ai = MinimaxAi::new(MinimaxConfig {
+        max_depth: 20,
+        time_limit_ms: 12_000,
+        player: Color::White,
+    });
+
+    assert_eq!(ai.choose_turn_time_budget(&board), 8_000);
+}
+
+#[test]
+fn cancelled_search_does_not_commit_incomplete_depth() {
+    let board = board_with_moves(&[
+        (7, 7, Color::Black),
+        (7, 8, Color::White),
+        (8, 7, Color::Black),
+        (8, 8, Color::White),
+        (6, 6, Color::Black),
+        (9, 9, Color::White),
+    ]);
+    let mut ai = MinimaxAi::new(MinimaxConfig {
+        max_depth: 20,
+        time_limit_ms: 8_000,
+        player: Color::Black,
+    });
+    ai.node_count.store(PROGRESS_NODE_CHECK_FREQ - 1, Ordering::Relaxed);
+    let root_hash = ai.zobrist.hash_board(&board);
+    let moves = ai.generate_ordered_moves(&board);
+
+    let stop = ai.should_stop.clone();
+    let mut cancel_on_progress = move |_percent: i32| {
+        stop.store(true, Ordering::Release);
+    };
+    let mut progress = Some(&mut cancel_on_progress as &mut dyn FnMut(i32));
+
+    let result = ai.search_one_depth(
+        &board,
+        &moves,
+        2,
+        moves[0],
+        root_hash,
+        i32::MIN + 1,
+        i32::MAX - 1,
+        &mut progress,
+        &mut ProgressState::new(),
+    );
+
+    assert!(matches!(result, Err(crate::algorithm::lifecycle::SearchAbort::Cancelled)));
+    assert_eq!(ai.last_completed_depth, 0);
+    assert_eq!(ai.last_root_score, 0);
+}
+
+#[test]
+fn local_eval_matches_full_eval_for_endpoint_four_away() {
+    let board = board_with_moves(&[
+        (7, 5, Color::Black),
+        (7, 6, Color::Black),
+        (7, 7, Color::Black),
+        (7, 8, Color::Black),
+    ]);
+    let ai = MinimaxAi::new(MinimaxConfig {
+        max_depth: 20,
+        time_limit_ms: 8_000,
+        player: Color::Black,
+    });
+
+    let full = ai.static_eval(&board, Color::Black);
+    let local = ai.static_eval_local(&board, Color::Black, Some((7, 8)));
+    let endpoint_score = ai.move_tactical_score(&board, 7, 4, Color::Black);
+    assert!(endpoint_score >= SCORE_FOUR, "endpoint_score={endpoint_score}");
+    assert!((full - local).abs() <= 128, "local={local}, full={full}");
+}
+
+#[test]
+fn authoritative_shortcut_safety_is_conservative_on_tactical_timeout() {
+    let board = board_with_moves(&[
+        (7, 5, Color::Black),
+        (7, 6, Color::Black),
+        (7, 8, Color::Black),
+        (5, 7, Color::Black),
+        (6, 7, Color::Black),
+        (8, 7, Color::Black),
+        (4, 7, Color::White),
+        (10, 10, Color::White),
+        (10, 11, Color::White),
+    ]);
+    let white = MinimaxAi::new(MinimaxConfig {
+        max_depth: 20,
+        time_limit_ms: 1,
+        player: Color::White,
+    });
+
+    assert!(
+        white.opponent_authoritative_refutation_after(&board, 0, 0, Color::White, Color::Black),
+        "shortcut safety should stay conservative when compound/VCF verification cannot finish"
+    );
 }

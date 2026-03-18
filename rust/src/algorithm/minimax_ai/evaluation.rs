@@ -43,6 +43,11 @@ impl MinimaxAi {
         };
 
         let shape_bonus = self.local_shape_bonus_after_placed(&b, row, col, self.config.player);
+        let future_pressure = if self.config.max_depth >= 20 && board.move_count >= 24 {
+            self.future_pressure_bonus(&b, row, col, self.config.player, &next)
+        } else {
+            0
+        };
         let threat_penalty = when_threat_penalty(opp_summary.best_score, board.move_count);
         let counterplay_penalty = if self.config.max_depth >= 20 {
             self.forced_counterplay_risk(&b, self.config.player)
@@ -54,8 +59,96 @@ impl MinimaxAi {
             + mid_threat_count * mid_weight
             + best_follow / follow_divisor
             + shape_bonus
+            + future_pressure
             - threat_penalty
             - counterplay_penalty
+    }
+
+    fn future_pressure_bonus(
+        &self,
+        board: &Board,
+        anchor_row: usize,
+        anchor_col: usize,
+        player: Color,
+        moves: &[(usize, usize)],
+    ) -> i32 {
+        let mut pressure_points: Vec<((usize, usize), i32, i32)> = moves
+            .iter()
+            .filter_map(|&(row, col)| {
+                let score = self.normalized_eval_score(board, row, col, player);
+                if score < SCORE_THREE {
+                    return None;
+                }
+                let control = self.local_control_density(board, row, col);
+                Some(((row, col), score, control))
+            })
+            .collect();
+
+        if pressure_points.is_empty() {
+            return 0;
+        }
+
+        pressure_points.sort_by(|a, b| {
+            let lhs = a.1 + a.2 * 120;
+            let rhs = b.1 + b.2 * 120;
+            rhs.cmp(&lhs)
+        });
+
+        let top: Vec<((usize, usize), i32, i32)> = pressure_points.into_iter().take(6).collect();
+        let mut tier_bonus = 0i32;
+        let mut region_mask = 0u16;
+
+        for &((row, col), score, control) in &top {
+            tier_bonus += if score >= DOUBLE_THREAT_THRESHOLD {
+                3_200
+            } else if score >= SCORE_BLOCKED_FOUR {
+                1_900
+            } else {
+                750
+            };
+            tier_bonus += control * 70;
+            region_mask |= 1u16 << self.pressure_region(anchor_row, anchor_col, row, col);
+        }
+
+        let diversity_bonus = region_mask.count_ones() as i32 * 420;
+        let mut spread_bonus = 0i32;
+        for i in 0..top.len().min(4) {
+            for j in (i + 1)..top.len().min(4) {
+                let first = top[i].0;
+                let second = top[j].0;
+                let distance = (first.0 as i32 - second.0 as i32)
+                    .abs()
+                    .max((first.1 as i32 - second.1 as i32).abs());
+                if distance >= 4 {
+                    spread_bonus += 260;
+                }
+            }
+        }
+
+        tier_bonus + diversity_bonus + spread_bonus
+    }
+
+    fn pressure_region(
+        &self,
+        anchor_row: usize,
+        anchor_col: usize,
+        row: usize,
+        col: usize,
+    ) -> u8 {
+        let dr = row as i32 - anchor_row as i32;
+        let dc = col as i32 - anchor_col as i32;
+        match (dr.signum(), dc.signum()) {
+            (-1, -1) => 0,
+            (-1, 0) => 1,
+            (-1, 1) => 2,
+            (0, -1) => 3,
+            (0, 0) => 4,
+            (0, 1) => 5,
+            (1, -1) => 6,
+            (1, 0) => 7,
+            (1, 1) => 8,
+            _ => 4,
+        }
     }
 
     pub(super) fn threat_profile(&self, board: &Board, player: Color) -> ThreatProfile {
@@ -316,7 +409,7 @@ impl MinimaxAi {
         density
     }
 
-    fn static_eval(&self, board: &Board, player: Color) -> i32 {
+    pub(super) fn static_eval(&self, board: &Board, player: Color) -> i32 {
         let mut score = 0;
         let candidates = board.generate_moves();
         if candidates.is_empty() {

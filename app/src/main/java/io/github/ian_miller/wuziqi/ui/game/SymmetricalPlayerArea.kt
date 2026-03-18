@@ -2,6 +2,7 @@ package io.github.ian_miller.wuziqi.ui.game
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Check
@@ -9,7 +10,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -176,7 +176,7 @@ fun GameControlsRow(
                 enabled = lastMoveExists && !isAiThinking,
                 containerColor = MaterialTheme.colorScheme.secondaryContainer
              ) {
-                 Icon(Icons.Filled.Undo, null)
+                 Icon(Icons.AutoMirrored.Filled.Undo, null)
                  if (!isVsHuman) {
                      Spacer(Modifier.width(8.dp))
                      Text(s.undo, maxLines = 1)

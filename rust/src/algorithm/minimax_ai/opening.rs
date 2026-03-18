@@ -9,6 +9,9 @@ impl MinimaxAi {
                 5..=6 => base.min(2_000),
                 7..=14 => base.min(6_000),
                 15..=24 => base.min(9_000),
+                25..=34 => base.min(10_000),
+                35..=44 => base.min(9_000),
+                _ if board.move_count >= 45 => base.min(8_000),
                 _ => base,
             }
         } else {

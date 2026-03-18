@@ -22,7 +22,7 @@
 //! - `nativeDestroy`: 销毁实例
 
 use jni::objects::{JByteArray, JClass, JObject, JValue};
-use jni::sys::{jint, jlong};
+use jni::sys::{jint, jlong, jlongArray};
 use jni::JNIEnv;
 
 // 导出内部模块
@@ -33,6 +33,7 @@ mod evaluator;
 
 use algorithm::minimax_ai::{MinimaxAi, MinimaxConfig};
 use algorithm::mcts_ai::{MctsAi, MctsConfig};
+use algorithm::lifecycle::{TurnOutcome, TurnStatus};
 use board::{Board, Color};
 
 // ============================================================================
@@ -48,21 +49,21 @@ enum AnyAi {
 }
 
 impl AnyAi {
-    fn take_turn(&mut self, board: &Board) -> Option<(usize, usize)> {
+    fn take_turn_result(&mut self, board: &Board) -> TurnOutcome {
         match self {
-            AnyAi::Minimax(ai) => ai.take_turn(board),
-            AnyAi::Mcts(ai) => ai.take_turn(board),
+            AnyAi::Minimax(ai) => ai.take_turn_result(board),
+            AnyAi::Mcts(ai) => ai.take_turn_result(board),
         }
     }
 
-    fn take_turn_with_progress(
+    fn take_turn_with_progress_result(
         &mut self,
         board: &Board,
         on_progress: &mut Option<&mut dyn FnMut(i32)>,
-    ) -> Option<(usize, usize)> {
+    ) -> TurnOutcome {
         match self {
-            AnyAi::Minimax(ai) => ai.take_turn_with_progress(board, on_progress),
-            AnyAi::Mcts(ai) => ai.take_turn_with_progress(board, on_progress),
+            AnyAi::Minimax(ai) => ai.take_turn_with_progress_result(board, on_progress),
+            AnyAi::Mcts(ai) => ai.take_turn_with_progress_result(board, on_progress),
         }
     }
 
@@ -106,6 +107,39 @@ fn color_from_int(player: jint) -> Color {
 
 unsafe fn ai_from_ptr<'a>(ptr: jlong) -> Option<&'a mut AnyAi> {
     if ptr == 0 { None } else { Some(&mut *(ptr as *mut AnyAi)) }
+}
+
+fn turn_status_code(status: TurnStatus) -> jlong {
+    match status {
+        TurnStatus::Completed => 0,
+        TurnStatus::Timeout => 1,
+        TurnStatus::Cancelled => 2,
+        TurnStatus::NoMove => 3,
+    }
+}
+
+fn encode_turn_outcome(env: &mut JNIEnv, outcome: TurnOutcome) -> jlongArray {
+    let move_code = outcome
+        .best_move
+        .map(|(row, col)| (row * 15 + col) as jlong)
+        .unwrap_or(-1);
+    let values = [
+        turn_status_code(outcome.status),
+        move_code,
+        outcome.completed_depth as jlong,
+        outcome.elapsed_ms as jlong,
+        outcome.node_count as jlong,
+    ];
+    match env.new_long_array(values.len() as i32) {
+        Ok(array) => {
+            if env.set_long_array_region(&array, 0, &values).is_ok() {
+                array.into_raw()
+            } else {
+                std::ptr::null_mut()
+            }
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 // ============================================================================
@@ -216,10 +250,34 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTakeTurn(
         None => return -1,
     };
 
-    match ai.take_turn(&board) {
+    match ai.take_turn_result(&board).best_move {
         Some((row, col)) => (row * 15 + col) as jint,
         None => -1,
     }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTakeTurnResult(
+    mut env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+    board_data: JByteArray,
+) -> jlongArray {
+    if ptr == 0 { return std::ptr::null_mut(); }
+
+    let bytes = match env.convert_byte_array(&board_data) {
+        Ok(b) => b,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    if bytes.len() < 225 { return std::ptr::null_mut(); }
+
+    let board = Board::from_bytes(&bytes);
+    let ai = match unsafe { ai_from_ptr(ptr) } {
+        Some(a) => a,
+        None => return std::ptr::null_mut(),
+    };
+
+    encode_turn_outcome(&mut env, ai.take_turn_result(&board))
 }
 
 /// 执行思考（带进度回调）
@@ -269,10 +327,58 @@ pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTakeTurnWith
         None
     };
 
-    match ai.take_turn_with_progress(&board, &mut progress_opt) {
+    match ai.take_turn_with_progress_result(&board, &mut progress_opt).best_move {
         Some((row, col)) => (row * 15 + col) as jint,
         None => -1,
     }
+}
+
+#[no_mangle]
+pub extern "C" fn Java_io_github_ian_1miller_wuziqi_ai_RustAi_nativeTakeTurnWithProgressResult(
+    mut env: JNIEnv,
+    _class: JClass,
+    ptr: jlong,
+    board_data: JByteArray,
+    callback: JObject,
+) -> jlongArray {
+    if ptr == 0 { return std::ptr::null_mut(); }
+
+    let bytes = match env.convert_byte_array(&board_data) {
+        Ok(b) => b,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    if bytes.len() < 225 { return std::ptr::null_mut(); }
+
+    let board = Board::from_bytes(&bytes);
+    let ai = match unsafe { ai_from_ptr(ptr) } {
+        Some(a) => a,
+        None => return std::ptr::null_mut(),
+    };
+
+    let global_cb = if callback.is_null() {
+        None
+    } else {
+        env.new_global_ref(callback).ok()
+    };
+
+    let mut progress_fn = |percent: i32| {
+        if let Some(ref cb) = global_cb {
+            let _ = env.call_method(
+                cb.as_obj(),
+                "onProgress",
+                "(I)V",
+                &[JValue::Int(percent.clamp(0, 100))],
+            );
+        }
+    };
+    let mut progress_opt: Option<&mut dyn FnMut(i32)> = if global_cb.is_some() {
+        Some(&mut progress_fn)
+    } else {
+        None
+    };
+
+    let outcome = ai.take_turn_with_progress_result(&board, &mut progress_opt);
+    encode_turn_outcome(&mut env, outcome)
 }
 
 /// 使当前计算失效

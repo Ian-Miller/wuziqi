@@ -15,6 +15,7 @@
     <string name="save">保存</string>
     <string name="load">加载</string>
     <string name="settings">设置</string>
+    <string name="current_version">当前版本</string>
     <string name="sound">音效</string>
     <string name="vibration">震动</string>
     <string name="player">玩家</string>

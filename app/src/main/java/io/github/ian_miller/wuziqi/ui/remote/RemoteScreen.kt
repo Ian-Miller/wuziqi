@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,7 +27,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import io.github.alexzhirkevich.qrose.rememberQrCodePainter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -389,7 +390,7 @@ private fun RemoteLobbyContent(
             elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         ) {
-            Icon(Icons.Default.Login, null, Modifier.size(20.dp))
+            Icon(Icons.AutoMirrored.Filled.Login, null, Modifier.size(20.dp))
             Spacer(modifier = Modifier.width(10.dp))
             Text(s.remoteJoinAction, style = MaterialTheme.typography.titleMedium)
         }
@@ -494,6 +495,7 @@ private fun RemoteConnectedLobbyContent(
 
 // ── 创建中：显示 QR + 邀请码 ──────────────────────────────────────────────────
 
+@Suppress("DEPRECATION")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun RemoteCreatingContent(inviteCode: String, isLan: Boolean = false) {

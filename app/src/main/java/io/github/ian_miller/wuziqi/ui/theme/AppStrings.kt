@@ -88,6 +88,7 @@ data class AppStrings(
     val langAuto: String,
     val langEnglish: String,
     val langChinese: String,
+    val currentVersionFmt: (String) -> String,
 
     // ── 玩家档案 ──────────────────────────────────────────────────────────────
     val playerCenter: String,
@@ -341,6 +342,7 @@ val ZhStrings = AppStrings(
     langAuto = "跟随系统",
     langEnglish = "English",
     langChinese = "中文",
+    currentVersionFmt = { version -> "当前版本: $version" },
 
     playerCenter = "玩家中心",
     newAccount = "新建",
@@ -599,6 +601,7 @@ val EnStrings = AppStrings(
     langAuto = "Auto (System)",
     langEnglish = "English",
     langChinese = "中文",
+    currentVersionFmt = { version -> "Version: $version" },
 
     playerCenter = "Player Hub",
     newAccount = "New",

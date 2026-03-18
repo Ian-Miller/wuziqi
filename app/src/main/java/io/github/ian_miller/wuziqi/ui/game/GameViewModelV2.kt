@@ -340,8 +340,8 @@ class GameViewModelV2 @Inject constructor(
      */
     fun addPauseSource(source: PauseSource) {
         val wasEmpty = pauseSources.isEmpty()
-        pauseSources.add(source)
-        if (wasEmpty) {
+        val added = pauseSources.add(source)
+        if (added && wasEmpty) {
             // 首个暂停源：触发真正的暂停
             _doPause()
         }
@@ -351,8 +351,8 @@ class GameViewModelV2 @Inject constructor(
      * 移除一个暂停源。最后一个移除（1→0）时向 Actor 发送 Cmd.Resume。
      */
     fun removePauseSource(source: PauseSource) {
-        pauseSources.remove(source)
-        if (pauseSources.isEmpty()) {
+        val removed = pauseSources.remove(source)
+        if (removed && pauseSources.isEmpty()) {
             // 所有源都已解除：触发恢复
             _doResume()
         }
@@ -848,11 +848,10 @@ class GameViewModelV2 @Inject constructor(
             }
 
             is State.WaitingForAi -> {
-                if (cmd !is Cmd.AiDone && cmd !is Cmd.Resume) {
-                    // 普通路径（新回合、Delaying 结束等）：先 validate 确保 should_stop=false
-                    validateAi()
-                    launchAiThinking(newState)
-                } else if (cmd is Cmd.Resume) {
+                // 只有真正进入新的 WaitingForAi 状态时才启动/重启 AI。
+                // 这样可以避免多余的 Resume 或重复生命周期事件把当前 AI 任务取消后又立刻重启，
+                // 导致进度环回退、秒数归零但仍未落子的竞态表现。
+                if (newState !== oldState) {
                     validateAi()
                     launchAiThinking(newState)
                 }
@@ -1474,13 +1473,14 @@ class GameViewModelV2 @Inject constructor(
                     }
                 }
 
-                val move = ai.takeTurn(boardBytes) { percent ->
+                val result = ai.takeTurnDetailed(boardBytes) { percent ->
                     // Rust 回调进度直通 [0, 1]；速度上限公式自动分配空间
                     progressTracker.advanceTo(percent.coerceIn(0, 100) / 100f)
                 }
+                val move = result.move
                 pollJob.cancel()
                 _aiBestMoveHint.value = null   // 落子前清除预览
-                if (move != null) {
+                if (result.status != RustAi.TurnStatus.CANCELLED && result.status != RustAi.TurnStatus.NO_MOVE && move != null) {
                     if (!shouldSkipOpeningDelay) {
                         val currentProgress = progressTracker.progress.value
                         // 仅在进度明显未到位时才补足最小动画时长；若视觉上已接近满环则立即落子

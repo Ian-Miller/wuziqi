@@ -20,8 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import io.github.ian_miller.wuziqi.BuildConfig
 import io.github.ian_miller.wuziqi.domain.model.GameMode
 import io.github.ian_miller.wuziqi.ui.menu.MenuViewModel
 import io.github.ian_miller.wuziqi.ui.theme.LocalStrings
@@ -176,6 +178,31 @@ fun SettingsScreen(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = Color(0xFF8D6E63).copy(alpha = 0.6f),
+                        thickness = 1.dp,
+                    )
+                    Text(
+                        text = s.currentVersionFmt(BuildConfig.VERSION_NAME),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF6D4C41),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = Color(0xFF8D6E63).copy(alpha = 0.6f),
+                        thickness = 1.dp,
+                    )
+                }
             }
         }
     }

@@ -9,10 +9,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue // Added
@@ -113,7 +113,7 @@ fun ControlButtons(
     ) {
         if (showUndo) {
             IconButton(onClick = onUndo, enabled = undoEnabled) {
-                Icon(Icons.Default.Undo, contentDescription = "撤销")
+                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "撤销")
             }
         }
         // 第二个按钮：始终显示为停止，仅在游戏进行时可用

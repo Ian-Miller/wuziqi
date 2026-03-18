@@ -14,6 +14,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,7 +31,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import io.github.ian_miller.wuziqi.domain.model.PieceColor
 import io.github.ian_miller.wuziqi.ui.game.BoardCanvas
 import io.github.ian_miller.wuziqi.ui.game.GameStatus
@@ -135,7 +138,7 @@ fun RemoteGameScreen(
 
                         SettingsSwitchRow(
                             text = s.sound,
-                            icon = Icons.Filled.VolumeUp,
+                            icon = Icons.AutoMirrored.Filled.VolumeUp,
                             checked = soundEnabled,
                             onCheckedChange = { viewModel.setSoundEnabled(it) },
                         )
@@ -497,7 +500,7 @@ fun RemoteGameScreen(
                     RoundedCornerShape(50),
                 ),
             ) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "返回大厅", tint = Color(0xFFFFE082))
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回大厅", tint = Color(0xFFFFE082))
             }
         }
 
@@ -529,7 +532,7 @@ fun RemoteGameScreen(
                             RoundedCornerShape(50),
                         ),
                     ) {
-                        Icon(Icons.Default.ExitToApp, contentDescription = s.exitMatch, tint = Color(0xFFFFE082))
+                        Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = s.exitMatch, tint = Color(0xFFFFE082))
                     }
                 }
             }

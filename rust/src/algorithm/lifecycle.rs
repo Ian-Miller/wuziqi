@@ -1,5 +1,37 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SearchAbort {
+    Timeout,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TurnStatus {
+    Completed,
+    Timeout,
+    Cancelled,
+    NoMove,
+}
+
+impl From<SearchAbort> for TurnStatus {
+    fn from(value: SearchAbort) -> Self {
+        match value {
+            SearchAbort::Timeout => TurnStatus::Timeout,
+            SearchAbort::Cancelled => TurnStatus::Cancelled,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TurnOutcome {
+    pub(crate) best_move: Option<(usize, usize)>,
+    pub(crate) status: TurnStatus,
+    pub(crate) completed_depth: i32,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) node_count: u64,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct HeartbeatConfig {
     pub(crate) report_interval_ms: u64,
@@ -29,6 +61,16 @@ pub(crate) trait SearchLifecycle {
     fn time_limit_ms(&self) -> u64;
     fn heartbeat_config(&self) -> HeartbeatConfig;
 
+    fn abort_reason(&self) -> Option<SearchAbort> {
+        if self.stop_flag().load(Ordering::Acquire) {
+            return Some(SearchAbort::Cancelled);
+        }
+        if self.elapsed_ms() > self.time_limit_ms() {
+            return Some(SearchAbort::Timeout);
+        }
+        None
+    }
+
     fn maybe_report_progress(
         &self,
         on_progress: &mut Option<&mut dyn FnMut(i32)>,
@@ -57,14 +99,16 @@ pub(crate) trait SearchLifecycle {
         tick: u64,
         on_progress: &mut Option<&mut dyn FnMut(i32)>,
         progress_state: &mut ProgressState,
-    ) -> bool {
-        if self.stop_flag().load(Ordering::Acquire) {
-            return false;
+    ) -> Result<(), SearchAbort> {
+        if let Some(reason) = self.abort_reason() {
+            return Err(reason);
         }
 
         let config = self.heartbeat_config();
-        if tick % config.stop_check_interval == 0 && self.elapsed_ms() > self.time_limit_ms() {
-            return false;
+        if tick % config.stop_check_interval == 0 {
+            if let Some(reason) = self.abort_reason() {
+                return Err(reason);
+            }
         }
 
         if tick % config.progress_check_interval == 0 {
@@ -79,7 +123,7 @@ pub(crate) trait SearchLifecycle {
             );
         }
 
-        true
+        Ok(())
     }
 
     fn invalidate_search(&self) {

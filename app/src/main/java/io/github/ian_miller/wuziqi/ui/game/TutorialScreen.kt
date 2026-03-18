@@ -7,7 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Lightbulb
@@ -58,7 +58,7 @@ fun TutorialScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = null,
                             tint = Color(0xFF3E2723)
                         )
@@ -230,7 +230,7 @@ fun TutorialScreen(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        Divider(color = Color(0xFF5D4037).copy(alpha = 0.3f))
+                        HorizontalDivider(color = Color(0xFF5D4037).copy(alpha = 0.3f))
                         Spacer(modifier = Modifier.height(16.dp))
 
                         TipItem(
@@ -240,7 +240,7 @@ fun TutorialScreen(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        Divider(color = Color(0xFF5D4037).copy(alpha = 0.3f))
+                        HorizontalDivider(color = Color(0xFF5D4037).copy(alpha = 0.3f))
                         Spacer(modifier = Modifier.height(16.dp))
 
                         TipItem(

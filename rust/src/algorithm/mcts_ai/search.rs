@@ -17,7 +17,7 @@ impl MctsAi {
 
         loop {
             iter_count += 1;
-            if !self.heartbeat(iter_count, on_progress, progress) {
+            if self.heartbeat(iter_count, on_progress, progress).is_err() {
                 break;
             }
 
