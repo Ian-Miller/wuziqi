@@ -31,6 +31,7 @@ okhttp = "5.3.2"
 camerax = "1.4.1"
 mlkitBarcode = "17.3.0"
 javawebsocket = "1.5.7"
+zxingCore = "3.5.3"
 
 [libraries]
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
@@ -81,6 +82,7 @@ camerax-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref =
 camerax-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 mlkit-barcode = { module = "com.google.mlkit:barcode-scanning", version.ref = "mlkitBarcode" }
 javawebsocket = { module = "org.java-websocket:Java-WebSocket", version.ref = "javawebsocket" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
 
 [bundles]
 androidx-compose = ["androidx-compose-ui", "androidx-compose-ui-graphics" ]

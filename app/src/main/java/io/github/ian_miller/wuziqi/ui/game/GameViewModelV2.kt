@@ -2,6 +2,7 @@ package io.github.ian_miller.wuziqi.ui.game
 
 import android.app.Application
 import android.content.Context
+import android.content.SharedPreferences
 import android.media.SoundPool
 import android.os.Build
 import android.os.VibrationEffect
@@ -311,6 +312,12 @@ class GameViewModelV2 @Inject constructor(
     private var stampSoundId: Int = 0
     private val vibrator = getApplication<Application>().getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     private val prefs = getApplication<Application>().getSharedPreferences("gomoku_prefs", Context.MODE_PRIVATE)
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            KEY_SELECTED_DIFFICULTY -> syncDifficultyFromPrefs()
+            in SETTINGS_KEYS -> syncSettingsFromPrefs()
+        }
+    }
     
     // AI 任务
     private var aiJob: Job? = null
@@ -387,6 +394,7 @@ class GameViewModelV2 @Inject constructor(
     
     init {
         loadSoundEffects()
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
     }
     
     // ========================================================================
@@ -440,6 +448,7 @@ class GameViewModelV2 @Inject constructor(
         
         is State.WaitingForAi -> when (cmd) {
             is Cmd.AiDone -> handleAiDone(state, cmd)
+            is Cmd.UpdateSettings -> state.copy(settings = cmd.settings)
             is Cmd.Pause -> State.Pausing(state)
             is Cmd.Stop -> {
                 invalidateAi()
@@ -462,6 +471,7 @@ class GameViewModelV2 @Inject constructor(
                 destroyAi()
                 State.Paused(state.returnState)
             }
+            is Cmd.UpdateSettings -> state.copy(returnState = state.returnState.copy(settings = cmd.settings))
             is Cmd.AiCancelled -> {
                 destroyAi()
                 // resumeRequested=true → 返回 WaitingForAi，副作用会重新触发 AI；否则进入 Paused
@@ -479,6 +489,7 @@ class GameViewModelV2 @Inject constructor(
         }
         
         is State.Paused -> when (cmd) {
+            is Cmd.UpdateSettings -> state.copy(returnState = state.returnState.copy(settings = cmd.settings))
             is Cmd.Resume -> {
                 validateAi()
                 state.returnState
@@ -498,6 +509,7 @@ class GameViewModelV2 @Inject constructor(
 
         is State.Delaying -> when (cmd) {
             is Cmd.DelayElapsed -> state.nextState   // 副作用自动启动 AI
+            is Cmd.UpdateSettings -> State.Delaying(state.nextState.copy(settings = cmd.settings))
             is Cmd.Pause -> State.Paused(state.nextState)  // 跳过延迟直接暂停
             is Cmd.Stop -> State.Idle(
                 mode = state.nextState.mode,
@@ -510,6 +522,8 @@ class GameViewModelV2 @Inject constructor(
         }
 
         is State.Stopping -> when (cmd) {
+            is Cmd.UpdateSettings -> state.copy(settings = cmd.settings)
+            is Cmd.SetDifficulty -> state.copy(difficulty = cmd.difficulty)
             is Cmd.AiDone -> {
                 destroyAi()
                 State.Idle(
@@ -904,18 +918,8 @@ class GameViewModelV2 @Inject constructor(
     // ========================================================================
     
     fun initialize(mode: GameMode) {
-        val settings = GameSettings(
-            soundEnabled = prefs.getBoolean("sound_enabled", true),
-            vibrationEnabled = prefs.getBoolean("vibration_enabled", true),
-            undoEnabled = prefs.getBoolean("undo_enabled", true),
-            aiAssistEnabled = prefs.getBoolean("ai_assist_enabled", true)
-        )
-        
-        val difficulty = try {
-            Difficulty.valueOf(prefs.getString("selected_difficulty", Difficulty.EASY.name)!!)
-        } catch (e: Exception) {
-            Difficulty.EASY
-        }
+        val settings = readSettingsFromPrefs()
+        val difficulty = readDifficultyFromPrefs()
         
         val aiColor = if (mode == GameMode.VS_AI) {
             try {
@@ -1048,6 +1052,43 @@ class GameViewModelV2 @Inject constructor(
         prefs.edit().putBoolean("ai_assist_enabled", enabled).apply()
         val current = getSettings()
         updateSettings(current.copy(aiAssistEnabled = enabled))
+    }
+
+    private fun syncSettingsFromPrefs() {
+        sendCommand(Cmd.UpdateSettings(readSettingsFromPrefs()))
+    }
+
+    private fun syncDifficultyFromPrefs() {
+        val difficulty = readDifficultyFromPrefs()
+        when (gameState.value) {
+            is State.Idle,
+            is State.GameOver,
+            is State.Stopping -> sendCommand(Cmd.SetDifficulty(difficulty))
+            else -> Unit
+        }
+    }
+
+    private fun readSettingsFromPrefs(): GameSettings = GameSettings(
+        soundEnabled = prefs.getBoolean("sound_enabled", true),
+        vibrationEnabled = prefs.getBoolean("vibration_enabled", true),
+        undoEnabled = prefs.getBoolean("undo_enabled", true),
+        aiAssistEnabled = prefs.getBoolean("ai_assist_enabled", true)
+    )
+
+    private fun readDifficultyFromPrefs(): Difficulty = try {
+        Difficulty.valueOf(prefs.getString(KEY_SELECTED_DIFFICULTY, Difficulty.EASY.name)!!)
+    } catch (e: Exception) {
+        Difficulty.EASY
+    }
+
+    companion object {
+        private const val KEY_SELECTED_DIFFICULTY = "selected_difficulty"
+        private val SETTINGS_KEYS = setOf(
+            "sound_enabled",
+            "vibration_enabled",
+            "undo_enabled",
+            "ai_assist_enabled",
+        )
     }
     
     // ========================================================================
@@ -1195,7 +1236,11 @@ class GameViewModelV2 @Inject constructor(
         is State.Idle -> s.mode
         is State.WaitingForPlayer -> s.mode
         is State.WaitingForAi -> s.mode
+        is State.Pausing -> s.returnState.mode
+        is State.Paused -> s.returnState.mode
+        is State.Delaying -> s.nextState.mode
         is State.GameOver -> s.mode
+        is State.Stopping -> s.mode
         else -> GameMode.VS_AI
     }
     
@@ -1203,7 +1248,11 @@ class GameViewModelV2 @Inject constructor(
         is State.Idle -> s.difficulty
         is State.WaitingForPlayer -> s.difficulty
         is State.WaitingForAi -> s.difficulty
+        is State.Pausing -> s.returnState.difficulty
+        is State.Paused -> s.returnState.difficulty
+        is State.Delaying -> s.nextState.difficulty
         is State.GameOver -> s.difficulty
+        is State.Stopping -> s.difficulty
         else -> Difficulty.EASY
     }
     
@@ -1211,8 +1260,12 @@ class GameViewModelV2 @Inject constructor(
         is State.Idle -> s.settings
         is State.WaitingForPlayer -> s.settings
         is State.WaitingForAi -> s.settings
+        is State.Pausing -> s.returnState.settings
+        is State.Paused -> s.returnState.settings
+        is State.Delaying -> s.nextState.settings
         is State.GameOver -> s.settings
-        else -> GameSettings()
+        is State.Stopping -> s.settings
+        else -> readSettingsFromPrefs()
     }
     
     fun getBoard(): Board? = when (val s = gameState.value) {
@@ -1922,6 +1975,7 @@ class GameViewModelV2 @Inject constructor(
     fun onResume() = removePauseSource(PauseSource.LIFECYCLE)
     
     override fun onCleared() {
+        prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         super.onCleared()
         soundPool.release()
         cancelAiJob()

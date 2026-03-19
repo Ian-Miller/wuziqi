@@ -2,6 +2,7 @@ package io.github.ian_miller.wuziqi.ui.menu
 
 import android.app.Application
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.ian_miller.wuziqi.domain.model.Difficulty
@@ -30,6 +31,11 @@ class MenuViewModel @Inject constructor(
 ) : AndroidViewModel(application) {
 
     private val prefs = getApplication<Application>().getSharedPreferences("gomoku_prefs", Context.MODE_PRIVATE)
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key in SETTINGS_KEYS) {
+            syncSettingsFromPrefs()
+        }
+    }
 
     // ========================================
     // UI 状态
@@ -65,6 +71,7 @@ class MenuViewModel @Inject constructor(
     val stats: StateFlow<Map<String, Any>> = _stats
 
     init {
+        prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         loadSettings()
         initPlayers()
     }
@@ -83,6 +90,21 @@ class MenuViewModel @Inject constructor(
             magnifierEnabled = prefs.getBoolean("magnifier_enabled", true),
             language = prefs.getString("language", "auto") ?: "auto",
         )
+    }
+
+    private fun syncSettingsFromPrefs() {
+        _uiState.update {
+            it.copy(
+                selectedMode = getModePreference(),
+                selectedDifficulty = getDifficultyPreference(),
+                soundEnabled = prefs.getBoolean("sound_enabled", true),
+                vibrationEnabled = prefs.getBoolean("vibration_enabled", true),
+                undoEnabled = prefs.getBoolean("undo_enabled", true),
+                aiAssistEnabled = prefs.getBoolean("ai_assist_enabled", false),
+                magnifierEnabled = prefs.getBoolean("magnifier_enabled", true),
+                language = prefs.getString("language", "auto") ?: "auto",
+            )
+        }
     }
 
     fun setLanguage(lang: String) {
@@ -245,5 +267,23 @@ class MenuViewModel @Inject constructor(
         Difficulty.valueOf(prefs.getString("selected_difficulty", Difficulty.EASY.name)!!)
     } catch (e: Exception) {
         Difficulty.EASY
+    }
+
+    override fun onCleared() {
+        prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+        super.onCleared()
+    }
+
+    companion object {
+        private val SETTINGS_KEYS = setOf(
+            "selected_mode",
+            "selected_difficulty",
+            "sound_enabled",
+            "vibration_enabled",
+            "undo_enabled",
+            "ai_assist_enabled",
+            "magnifier_enabled",
+            "language",
+        )
     }
 }

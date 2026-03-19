@@ -22,7 +22,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -501,10 +500,9 @@ private fun RemoteConnectedLobbyContent(
 internal fun RemoteCreatingContent(inviteCode: String, isLan: Boolean = false) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    val density = LocalDensity.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val qrPainter = rememberQrCodePainter(inviteCode)
+    val previewQrPainter = rememberQrCodePainter(inviteCode)
     var copied by remember { mutableStateOf(false) }
     val s = LocalStrings.current
 
@@ -545,7 +543,7 @@ internal fun RemoteCreatingContent(inviteCode: String, isLan: Boolean = false) {
                 contentAlignment = Alignment.Center,
             ) {
                 Image(
-                    painter = qrPainter,
+                    painter = previewQrPainter,
                     contentDescription = "邀请码 QR",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit,
@@ -601,7 +599,7 @@ internal fun RemoteCreatingContent(inviteCode: String, isLan: Boolean = false) {
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        val bmp = painterToBitmap(qrPainter, density)
+                        val bmp = generateQrBitmap(inviteCode)
                         val uri = saveBitmapToGallery(context, bmp)
                         snackbarHostState.showSnackbar(
                             if (uri != null) s.remoteSavedGallery else s.remoteSaveFailed
@@ -618,7 +616,7 @@ internal fun RemoteCreatingContent(inviteCode: String, isLan: Boolean = false) {
             }
             OutlinedButton(
                 onClick = {
-                    val bmp = painterToBitmap(qrPainter, density)
+                    val bmp = generateQrBitmap(inviteCode)
                     shareBitmapAsImage(context, bmp)
                 },
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF5D4037)),

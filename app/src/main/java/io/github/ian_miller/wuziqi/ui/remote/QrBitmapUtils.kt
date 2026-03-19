@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -14,7 +15,11 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.core.content.FileProvider
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.MultiFormatWriter
 import java.io.File
+import java.util.EnumMap
 
 /**
  * 将 Compose Painter（如 qrose QrCodePainter）渲染为 Bitmap。
@@ -39,6 +44,31 @@ fun painterToBitmap(painter: Painter, density: Density, sizePx: Int = 512): Bitm
         with(painter) { draw(Size(qrSizePx.toFloat(), qrSizePx.toFloat())) }
     }
     androidCanvas.restore()
+    return bitmap
+}
+
+/** 直接从邀请码生成 QR Bitmap，避免导出路径复用 Compose painter 的内部绘制状态。 */
+fun generateQrBitmap(content: String, sizePx: Int = 512): Bitmap {
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+    bitmap.eraseColor(AndroidColor.WHITE)
+
+    val padPx = (sizePx * 0.10f).toInt().coerceAtLeast(16)
+    val qrSizePx = sizePx - 2 * padPx
+    val hints = EnumMap<EncodeHintType, Any>(EncodeHintType::class.java).apply {
+        put(EncodeHintType.MARGIN, 0)
+        put(EncodeHintType.CHARACTER_SET, "UTF-8")
+    }
+    val matrix = MultiFormatWriter().encode(content, BarcodeFormat.QR_CODE, qrSizePx, qrSizePx, hints)
+    val pixels = IntArray(qrSizePx * qrSizePx)
+
+    for (y in 0 until qrSizePx) {
+        val rowOffset = y * qrSizePx
+        for (x in 0 until qrSizePx) {
+            pixels[rowOffset + x] = if (matrix.get(x, y)) AndroidColor.BLACK else AndroidColor.WHITE
+        }
+    }
+
+    bitmap.setPixels(pixels, 0, qrSizePx, padPx, padPx, qrSizePx, qrSizePx)
     return bitmap
 }
 

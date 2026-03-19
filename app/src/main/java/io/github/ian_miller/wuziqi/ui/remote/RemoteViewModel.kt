@@ -1,6 +1,7 @@
 package io.github.ian_miller.wuziqi.ui.remote
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.media.SoundPool
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -140,6 +141,12 @@ class RemoteViewModel @Inject constructor(
     val soundEnabled: StateFlow<Boolean> = _soundEnabled.asStateFlow()
     private val _vibrationEnabled = MutableStateFlow(gomokuPrefs.getBoolean("vibration_enabled", true))
     val vibrationEnabled: StateFlow<Boolean> = _vibrationEnabled.asStateFlow()
+    private val gomokuPrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            "sound_enabled" -> _soundEnabled.value = gomokuPrefs.getBoolean("sound_enabled", true)
+            "vibration_enabled" -> _vibrationEnabled.value = gomokuPrefs.getBoolean("vibration_enabled", true)
+        }
+    }
 
     // 音效播放
     private val soundPool = SoundPool.Builder().setMaxStreams(2).build()
@@ -164,6 +171,7 @@ class RemoteViewModel @Inject constructor(
     val relayStatus = client.relayStatus
 
     init {
+        gomokuPrefs.registerOnSharedPreferenceChangeListener(gomokuPrefsListener)
         if (!isRelayBlockedPermanently()) {
             client.connect(viewModelScope)
         } else {
@@ -1040,6 +1048,7 @@ class RemoteViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        gomokuPrefs.unregisterOnSharedPreferenceChangeListener(gomokuPrefsListener)
         super.onCleared()
         joinTimeoutJob?.cancel()
         reconnectJob?.cancel()
